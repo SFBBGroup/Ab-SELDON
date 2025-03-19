@@ -1,14 +1,10 @@
-# Ab-SELDON: Leveraging Diversity Data for an Efficient Automated Computational Pipeline for Antibody Design
+# Ab-SELDON
+Antibody Structural Enhancement Leveraging Diversity for Optimization of iNteractions
+
+Paper: Ab-SELDON: Leveraging Diversity Data for an Efficient Automated Computational Pipeline for Antibody Design
 
 ## Abstract
-
-[TBA]
-
-## Description
-
-Antibody Structural Enhancement Leveraging Diversity for Optimization of iNteractions
-This is an automated pipeline for antibody de novo design and/or optimization. 
-[TBA]
+The utilization of predictive tools has become increasingly prevalent in the development of biopharmaceuticals, reducing the time and cost of research. However, most methods for computational antibody design are hampered by their reliance on scarcely available antibody structures, potential for immunogenic modifications, and a restricted exploration of the paratope's potential chemical and conformational space. We propose Ab-SELDON, a modular and easily customizable antibody design pipeline capable of iteratively optimizing an antibody-antigen (Ab-Ag) interaction in five different modification steps, including CDR and framework grafting, and mutagenesis. The optimization process is guided by diversity data collected from millions of publicly available human antibody sequences. This approach enhanced the exploration of the chemical and conformational space of the paratope during computational tests involving the optimization of an anti-HER2 antibody. Optimization of another antibody against Gal-3BP stabilized the Ab-Ag interaction in molecular dynamics simulations. Tests with SKEMPI’s Ab-Ag mutations also demonstrated the pipeline’s ability to correctly identify the effect of most mutations.
 
 ## Installation
 
@@ -16,7 +12,7 @@ This is an automated pipeline for antibody de novo design and/or optimization.
 
 This pipeline requires the following software:
 -	[ImmuneBuilder](https://github.com/oxpig/ImmuneBuilder)
--	[AmberMD](https://ambermd.org/GetAmber.php)
+-	[AmberMD and AmberTools](https://ambermd.org/GetAmber.php)
 -	[PyRosetta](https://www.pyrosetta.org/downloads#h.6vttn15ac69d)
 -	[PDB2PQR](https://pdb2pqr.readthedocs.io/en/latest/getting.html#python-package-installer-pip)
 -	[ANARCI](https://github.com/oxpig/ANARCI)
@@ -25,6 +21,7 @@ This pipeline requires the following software:
 -	[PyMOL](https://github.com/schrodinger/pymol-open-source)
 
 ### Setup
+
 Once the required softwares are installed, enter the ab-seldon-v6.4/ folder and extract the pipeline's databases with:
 
 ` $ unrar x ab-seldon-databases.rar `
