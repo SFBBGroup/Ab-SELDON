@@ -6,6 +6,7 @@ Paper: Ab-SELDON: Leveraging Diversity Data for an Efficient Automated Computati
 ## Abstract
 The utilization of predictive tools has become increasingly prevalent in the development of biopharmaceuticals, reducing the time and cost of research. However, most methods for computational antibody design are hampered by their reliance on scarcely available antibody structures, potential for immunogenic modifications, and a restricted exploration of the paratope's potential chemical and conformational space. We propose Ab-SELDON, a modular and easily customizable antibody design pipeline capable of iteratively optimizing an antibody-antigen (Ab-Ag) interaction in five different modification steps, including CDR and framework grafting, and mutagenesis. The optimization process is guided by diversity data collected from millions of publicly available human antibody sequences. This approach enhanced the exploration of the chemical and conformational space of the paratope during computational tests involving the optimization of an anti-HER2 antibody. Optimization of another antibody against Gal-3BP stabilized the Ab-Ag interaction in molecular dynamics simulations. Tests with SKEMPI’s Ab-Ag mutations also demonstrated the pipeline’s ability to correctly identify the effect of most mutations.
 
+
 ## Installation
 
 ### Requirements
@@ -28,6 +29,7 @@ Ensure all requirements are installed correctly. In particular, use `python -m o
 Once the required softwares are installed, enter the `ab-seldon/` folder and extract the pipeline's databases with:
 
 ` $ unrar x ab-seldon-databases.rar `
+
 
 ## Usage
 ### Input
@@ -56,6 +58,7 @@ After the optimization process is concluded, the output files with the optimized
 - FINAL(...).fasta
 
 Additionally, a file called `swap_001.log` documents which modifications were tested, approved or rejected, along with their associated Ab-Ag predicted interaction energy. 
+
 
 ## Settings file parameters
 The `swap_settings.cfg` file contains the parameters of the optimization run, allowing the user to tailor the pipeline to their use case.
@@ -98,15 +101,26 @@ Determines the possible lengths of H3 CDRs that will be grafted for testing in t
 Discards any modifications whose resulting antibody model has any residue with an RMSD above the specified value, as measured by ImmuneBuilder's own built-in error prediction. The lower the value, the better the minimum quality of the models will be, but this will also increase the number of modifications rejected without evaluation by the scoring procedure. 
 
 ### swap_rep|max_cycles=150
+Number of optimization cycles dedicated to representative CDR grafting, if this module is executed.
 ### swap_rep|cdr_prob(H1|H2|L1|L2|L3)=393|954|8957|359|241825
+The probabilities of any of the non-H3 CDRs being selected for modification in each cycle. The default values are based on CDR diversity data calculated from human OAS sequences of naïve antibodies of healthy donors. Note that these probabilities are only used after the chain is selected, so H1 will only compete for selection with H2, while L1, L2 and L3 will only compete between themselves.
+To make the CDR selection random, simply change this parameter to `1|1|1|1|1`
+Any probabilities other than 0 are allowed. If, for example, modifications on CDR L1 must be prioritized, this parameter could be set to `1|1|999|1|1`. 
 ### swap_rep|chain_prob(H|L)=22|16
+The probabilities of either antibody chain being selected for modification.
 
 ### swap_bnk|check_conf(yes/no)=yes
+Whether or not the conformation of the new grafted CDR should be checked, to allow only CDRs with the same conformation that existed prior to the beginning of this step (by default, this is the conformation resulting from the representative CDR swapping step). 
 ### swap_bnk|conf_rmsd_limit=1.5
+Maximum RMSD deviation allowed for the modified CDR, if the `conf_check` parameter is set to `yes`. 
 ### swap_bnk|n_cycles=150
+Number of optimization cycles dedicated to OAS CDR grafting, if this module is executed.
 ### swap_bnk|cdr_prob(H1|H2|L1|L2|L3)=393|954|8957|359|241825
+The probabilities of any of the non-H3 CDRs being selected for modification in each cycle. Works the same way as the `swap_rep|cdr_prob` parameter.
 ### swap_bnk|chain_prob(H|L)=22|16
+The probabilities of either antibody chain being selected for modification. Works the same way as the `swap_rep|chain_prob` parameter.
 ### swap_bnk|indel_prob(no_indel|del|ins)=955|26|19
+
 
 ### mut|check_conf(yes/no)=yes
 ### mut|conf_rmsd_limit=1.5
