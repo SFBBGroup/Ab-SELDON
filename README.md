@@ -11,18 +11,21 @@ The utilization of predictive tools has become increasingly prevalent in the dev
 ### Requirements
 
 This pipeline requires the following software:
--	[ImmuneBuilder](https://github.com/oxpig/ImmuneBuilder)
--	[AmberMD and AmberTools](https://ambermd.org/GetAmber.php)
--	[PyRosetta](https://www.pyrosetta.org/downloads#h.6vttn15ac69d)
--	[PDB2PQR](https://pdb2pqr.readthedocs.io/en/latest/getting.html#python-package-installer-pip)
--	[ANARCI](https://github.com/oxpig/ANARCI)
--	[BLAST](https://www.ncbi.nlm.nih.gov/books/NBK52640/)
--	[pdb-tools](https://github.com/haddocking/pdb-tools)
--	[PyMOL](https://github.com/schrodinger/pymol-open-source)
+- Python (tested versions: 3.11.6; 3.12.3)
+-	[ImmuneBuilder](https://github.com/oxpig/ImmuneBuilder) (tested versions: 1.0.1; 1.1.1)
+-	[AmberMD and AmberTools](https://ambermd.org/GetAmber.php) (tested versions: Amber 22; Amber 24)
+-	[PyRosetta](https://www.pyrosetta.org/downloads#h.6vttn15ac69d) (tested versions: pyrosetta-2023.36; pyrosetta-2024.19)
+-	[PDB2PQR](https://pdb2pqr.readthedocs.io/en/latest/getting.html#python-package-installer-pip) (tested version: 3.6.1)
+-	[ANARCI](https://github.com/oxpig/ANARCI) 
+-	[BLAST](https://www.ncbi.nlm.nih.gov/books/NBK52640/) (tested versions: 2.12.0; 2.15.0)
+-	[pdb-tools](https://github.com/haddocking/pdb-tools) (tested version: 2.5.0)
+-	[PyMOL](https://github.com/schrodinger/pymol-open-source) (tested versions: 2.6.0a0; 3.0)
 
 ### Setup
 
-Once the required softwares are installed, enter the ab-seldon-v6.4/ folder and extract the pipeline's databases with:
+Ensure all requirements are installed correctly. In particular, use `python -m openmm.testInstallation` to see if OpenMM (on which ImmuneBuilder depends) is successfully computing forces with CUDA.
+
+Once the required softwares are installed, enter the ab-seldon/ folder and extract the pipeline's databases with:
 
 ` $ unrar x ab-seldon-databases.rar `
 
@@ -31,11 +34,13 @@ The pipeline takes as input:
 1) A fasta file [NAME].fasta with ONLY the sequence of the initial antibody that will be optimized. The heavy chain MUST come before the light chain;
 2) A PDB file [NAME].pdb (same name as the fasta) with the initial antibody-antigen complex whose interaction will be optimized. It must contain only one antibody molecule and its antigen. The antibody chains must be named H and L. It must not contain heteroatoms, only proteins.
 
-These files must be put into the pipeline's main folder, ab-seldon-v6.4/
+These files must be put into the pipeline's main folder, ab-seldon/
 
-To configure your optimization run, you must edit the configuration file (swap_settings.cfg). If you wish to run the pipeline with its default settings, simply edit the first parameter (prepare|input_name=) to replace the [NAME] with the name of your fasta/pdb file (eg. prepare|input_name=[NAME] becomes prepare|input_name=6PHB-clean if your inputs are 6PHB-clean.fasta and 6PHB-clean.pdb)
+To configure your optimization run, you must edit the configuration file (swap_settings.cfg). If you wish to run the pipeline with its default settings, simply edit the first parameter (prepare|input_name=) to replace the [NAME] with the name of your fasta/pdb file (eg. prepare|input_name=[NAME] becomes prepare|input_name=6phb if your inputs are named 6phb.fasta and 6phb.pdb)
 
 By default, it is assumed that PyMOL can be executed on the terminal with the `pymol` command. If not, change the command in pymol_command= (eg. to `pymol.exe`)
+
+For more information about how to customize other aspects of your optimization run (such as the optimization steps you wish to run, the number of cycles executed in each step, weightings of the probabilistic modification site selection, etc.), please read the deatils of each of the settings parameters [here](LINK).
 
 After these steps, run the pipeline by simply executing the main script:
 
@@ -45,4 +50,6 @@ After the optimization process is concluded, the output files with the optimized
 - complex_FINAL(...).pdb
 - FINAL(...).fasta
 
-If you wish to customize other aspects of your optimization run (such as the optimization steps you wish to run, the number of cycles executed in each step, weightings of the probabilistic modification site selection, etc.), please read the documentation of the pipeline [TBA].
+Additionally, a file called `swap_001.log` documents which modifications were tested, approved or rejected, along with their associated Ab-Ag predicted interaction energy. 
+
+
