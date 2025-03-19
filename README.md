@@ -36,7 +36,7 @@ The pipeline takes as input:
 
 These files must be put into the pipeline's main folder, ab-seldon/
 
-To configure your optimization run, you must edit the configuration file (swap_settings.cfg). If you wish to run the pipeline with its default settings, simply edit the first parameter (prepare|input_name=) to replace the [NAME] with the name of your fasta/pdb file (eg. prepare|input_name=[NAME] becomes prepare|input_name=6phb if your inputs are named 6phb.fasta and 6phb.pdb)
+To configure your optimization run, you must edit the configuration file (swap_settings.cfg). If you wish to run the pipeline with its default settings, simply edit the first parameter (prepare|input_name=) to replace the `[NAME]` with the name of your fasta/pdb file (eg. `prepare|input_name=[NAME]` becomes `prepare|input_name=6phb` if your inputs are named `6phb.fasta` and `6phb.pdb`
 
 By default, it is assumed that PyMOL can be executed on the terminal with the `pymol` command. If not, change the command in pymol_command= (eg. to `pymol.exe`)
 
