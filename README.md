@@ -103,11 +103,11 @@ Discards any modifications whose resulting antibody model has any residue with a
 ### swap_rep|max_cycles=150
 Number of optimization cycles dedicated to representative CDR grafting, if this module is executed.
 ### swap_rep|cdr_prob(H1|H2|L1|L2|L3)=393|954|8957|359|241825
-The probabilities of any of the non-H3 CDRs being selected for modification in each cycle. The default values are based on CDR diversity data calculated from human OAS sequences of naïve antibodies of healthy donors. Note that these probabilities are only used after the chain is selected, so H1 will only compete for selection with H2, while L1, L2 and L3 will only compete between themselves.
+The weights for probabilities of any of the non-H3 CDRs being selected for modification in each cycle. The default values are based on CDR diversity data calculated from human OAS sequences of naïve antibodies of healthy donors. Note that these probabilities are only used after the chain is selected, so H1 will only compete for selection with H2, while L1, L2 and L3 will only compete between themselves.
 To make the CDR selection random, simply change this parameter to `1|1|1|1|1`
 Any probabilities other than 0 are allowed. If, for example, modifications on CDR L1 must be prioritized, this parameter could be set to `1|1|999|1|1`. 
 ### swap_rep|chain_prob(H|L)=22|16
-The probabilities of either antibody chain being selected for modification.
+The weights for probabilities of either antibody chain being selected for modification.
 
 ### swap_bnk|check_conf(yes/no)=yes
 Whether or not the conformation of the new grafted CDR should be checked, to allow only CDRs with the same conformation that existed prior to the beginning of this step (by default, this is the conformation resulting from the representative CDR swapping step). 
@@ -116,25 +116,37 @@ Maximum RMSD deviation allowed for the modified CDR, if the `conf_check` paramet
 ### swap_bnk|n_cycles=150
 Number of optimization cycles dedicated to OAS CDR grafting, if this module is executed.
 ### swap_bnk|cdr_prob(H1|H2|L1|L2|L3)=393|954|8957|359|241825
-The probabilities of any of the non-H3 CDRs being selected for modification in each cycle. Works the same way as the `swap_rep|cdr_prob` parameter.
+The weights for probabilities of any of the non-H3 CDRs being selected for modification in each cycle. Works the same way as the `swap_rep|cdr_prob` parameter.
 ### swap_bnk|chain_prob(H|L)=22|16
-The probabilities of either antibody chain being selected for modification. Works the same way as the `swap_rep|chain_prob` parameter.
+The weights for probabilities of either antibody chain being selected for modification. Works the same way as the `swap_rep|chain_prob` parameter.
 ### swap_bnk|indel_prob(no_indel|del|ins)=955|26|19
-
+The weights for probabilities of the new CDR sequence having the same length as before (`no_indel`), having one less residue than before (`del`), or having one more residue than before (`ins`). This parameters simulates the occurrence of indels in CDR sequences during the antibody maturation process.
 
 ### mut|check_conf(yes/no)=yes
+Whether or not the conformation of the new grafted CDR should be checked. Works the same way as the `swap_bnk|check_conf` parameter.
 ### mut|conf_rmsd_limit=1.5
+Maximum RMSD deviation allowed for the modified CDR, if the `conf_check` parameter is set to `yes`.
 ### mut|n_cycles=150
+Number of optimization cycles dedicated to mutagenesis, if this module is executed.
 ### mut|cdr_prob(H1|H2|H3|L1|L2|L3)=377|2062|141994|5305|183|26120
+The weights for probabilities of any of the CDRs being selected for modification in each cycle. Note that this includes all six CDRs, instead of excluding CDR H3. The default weights reflect the diversities of these CDRs in memory antibodies, instead of naive antibodies like in the other modules.
 ### mut|chain_prob(H|L)=22|16
+The weights for probabilities of either antibody chain being selected for modification. Works the same way as the `swap_rep|chain_prob` parameter.
 ### mut|h3_cap(yes/no)=yes
+Whether or not the number of mutations directed to CDR H3 is set to 50% of all tested mutations. This option is available because of the extremely high diversity of CDR H3 compared to H1 and H2, which can lead to situations where these other two CDRs are never selected for mutagenesis. If `no` is selected, the CDR selection probabilities will simply follow the weights.
 ### mut|res_prob_mode(probabilistic/random)=probabilistic
+Whether or not the mutations on the CDRs will be made at random (random position and random new residue) or will be weighted be the diversities of the different positions and the residues found in them in memory antibodies.
 
 ### memory_frame|num_hyb_struc=50
+Number of hybrid structures (half memory, half naïve) that will be generated for each chain. That is, the number of memory heavy and light chain frameworks that will be grafted and modelled. For example, setting this parameter to 50 will result in the modelling of 50 hybrid antibodies with a memory framework in the heavy chain, and 50 antibodies with a memory framework in the light chain. Note that these hybrid antibodies are only modelled and have their conformations evaluated, no scoring procedure is performed. Therefore, this parameter can be set to higher numbers at little computational cost, if desired.
 ### memory_frame|num_fullmemory=5
+Number of memory frameworks of each chain that will be combined to form variable domains where both framework regions come from memory antibodies. For example, setting this parameter to 5 will result in the modelling and scoring of (5 heavy * 5 light) = 25 antibodies whose framework comes from memory sequences. 
 ### memory_frame|fwrk_mode(free/directed)=directed
+Whether the dataset of all memory antibody sequences (`free`), or the dataset of antibodies with a minimum number of mutations and mutations in important positions (`directed`) will be used as a source of framework regions for the grafting process.
 ### memory_frame|conf_rmsd_limit=1.5
+Maximum RMSD deviation allowed for the modelled antibodies (whole variable region). Above this threshold, the modification is discarded for excessively changing the conformation of the antibody.
 ### memory_frame|cdr_rmsd_limit=1.5
+Maximum RMSD deviation allowed for the individual CDRs. If any of the six CDRs reaches above this threshold, the modification is discarded for excessively changing the conformation of the paratope.
 
 
 
