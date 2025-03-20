@@ -1,4 +1,4 @@
-# Ready to run examples of the pipeline
+# Ready-to-run examples of the pipeline
 
 ## Ab-SELDON versions
 To simplify testing the pipeline, two versions are available in separate folders. To run an example, simply extract the `ab-seldon-databases.rar` file and execute the main script with the command `sh seldon.sh`
