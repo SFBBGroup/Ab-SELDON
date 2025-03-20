@@ -54,7 +54,7 @@ After these steps, run the pipeline by simply executing the main script:
 ` $ sh seldon.sh `
 
 ### Output
-After the optimization process is concluded, the output files with the optimized antibody and antibody-antigen complex will be identified wth a `FINAL` prefix:
+After the optimization process is concluded, the output files with the optimized antibody and antibody-antigen complex will be identified with a `FINAL` prefix:
 
 - complex_FINAL(...).pdb
 - FINAL(...).fasta
