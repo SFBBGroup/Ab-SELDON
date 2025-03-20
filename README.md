@@ -7,8 +7,6 @@ Paper: Ab-SELDON: Leveraging Diversity Data for an Efficient Automated Computati
 The utilization of predictive tools has become increasingly prevalent in the development of biopharmaceuticals, reducing the time and cost of research. However, most methods for computational antibody design are hampered by their reliance on scarcely available antibody structures, potential for immunogenic modifications, and a restricted exploration of the paratope's potential chemical and conformational space. We propose Ab-SELDON, a modular and easily customizable antibody design pipeline capable of iteratively optimizing an antibody-antigen (Ab-Ag) interaction in five different modification steps, including CDR and framework grafting, and mutagenesis. The optimization process is guided by diversity data collected from millions of publicly available human antibody sequences. This approach enhanced the exploration of the chemical and conformational space of the paratope during computational tests involving the optimization of an anti-HER2 antibody. Optimization of another antibody against Gal-3BP stabilized the Ab-Ag interaction in molecular dynamics simulations. Tests with SKEMPI’s Ab-Ag mutations also demonstrated the pipeline’s ability to correctly identify the effect of most mutations.
 
 
-
-
 ## Installation
 
 ### Requirements
@@ -33,9 +31,9 @@ Once the required softwares are installed, enter the `ab-seldon/` folder and ext
 ` $ unrar x ab-seldon-databases.rar `
 
 
-
-
 ## Usage
+NOTE: Ready-to-run examples are available in the `paper-ready-to-run/` folder, requiring only the extraction of the databases and the execution of the `sh seldon.sh` command.
+
 ### Input
 The pipeline takes as input:
 1) A fasta file [NAME].fasta with ONLY the sequence of the initial antibody that will be optimized. The heavy chain MUST come before the light chain;
