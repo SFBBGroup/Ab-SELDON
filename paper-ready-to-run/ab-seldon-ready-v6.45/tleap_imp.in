@@ -1,0 +1,9 @@
+source leaprc.protein.ff14SBonlysc
+
+pd = loadpdb out_pdb4amber-addH.pdb
+check pd
+set default pbradii mbondi3
+saveamberparm pd pd.parm7 pd.rst7
+quit
+
+

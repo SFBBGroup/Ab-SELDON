@@ -1,0 +1,19 @@
+energy minimization
+ &cntrl
+  imin = 1, 
+  ntmin = 1,
+  maxcyc = 99999,  
+  ncyc = 1000,
+  ntx = 1, 
+  ntwr = 500, 
+  ntpr = 500, 
+  ioutfm = 0, 
+  ntxo = 1, 
+  cut = 1000.0, 
+  ntb=0, 
+  igb = 8, 
+  gbsa = 3, 
+  surften = 0.007, 
+  saltcon = 0.1, 
+ &end
+ /
