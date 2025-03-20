@@ -4,48 +4,49 @@ The `swap_settings.cfg` file contains the parameters of the optimization run, al
 ### prepare|input_name=[NAME]
 - Specifies the input files. Replace the `[NAME]` with the name of your fasta/pdb file (eg. `prepare|input_name=[NAME]` becomes `prepare|input_name=6phb` if your inputs are named `6phb.fasta` and `6phb.pdb`.
 ### prepare|code_name(optional)=ab
-An additional identifier for the optimization run. Useful to differentiate replicates. If not needed, you can leave it on default (`ab`), but not empty. 
+- An additional identifier for the optimization run. Useful to differentiate replicates. If not needed, you can leave it on default (`ab`), but not empty. 
 ### prepare|number_of_structures=1
-How many optimization runs will be done sequentially for the same input files. If you wish to run more than one optimization in parallel instead of sequentially, leave this parameter on default (`1`), copy the main folder and execute the other optimization from the new location.
+- How many optimization runs will be done sequentially for the same input files. If you wish to run more than one optimization in parallel instead of sequentially, leave this parameter on default (`1`), copy the main folder and execute the other optimization from the new location.
 ### prepare|seldon_version=6.45
-Version of the pipeline being executed.
+- Version of the pipeline being executed.
 ### steps=h3|rep|bnk|mut|fwk|
-Specifies the optimization modules that will be used on the run and their order. By default (`h3|rep|bnk|mut|fwk|`), it executes CDR H3 grafting (`h3`), representative CDR grafting (`rep`), OAS CDR grafting (`bnk`), mutagenesis (`mut`), and framework grafting (`fwk`), in that order. 
-Changing this parameter to `mut|` will only run the mutagenesis step, for example, while `fwk|h3|mut|` will run the framework grafting, CDR H3 grafting and mutagenesis steps, in that order. Any combination, number and order of optimization modules is allowed by the pipeline.
+- Specifies the optimization modules that will be used on the run and their order. By default (`h3|rep|bnk|mut|fwk|`), it executes CDR H3 grafting (`h3`), representative CDR grafting (`rep`), OAS CDR grafting (`bnk`), mutagenesis (`mut`), and framework grafting (`fwk`), in that order. 
+- Changing this parameter to `mut|` will only run the mutagenesis step, for example, while `fwk|h3|mut|` will run the framework grafting, CDR H3 grafting and mutagenesis steps, in that order. Any combination, number and order of optimization modules is allowed by the pipeline.
 ### scoring_strictness(metro/normal/strict)=metro
-Specifies the strictness of the scoring procedure. 
-`metro` will approve any modifications that reduce the predicted interaction energy, while using the metropolis criterion to decide whether to approve modifications that increase the predicted interaction energy.
-`normal` will approve any modifications that reduce the predicted interaction energy and reject any that don't.
-`strict` will only approve modifications that reduce the predicted interaction energy by a specified amount (the `approval_threshold`) and reject any that don't.
+- Specifies the strictness of the scoring procedure. 
+- `metro` will approve any modifications that reduce the predicted interaction energy, while using the metropolis criterion to decide whether to approve modifications that increase the predicted interaction energy.
+- `normal` will approve any modifications that reduce the predicted interaction energy and reject any that don't.
+- `strict` will only approve modifications that reduce the predicted interaction energy by a specified amount (the `approval_threshold`) and reject any that don't.
 ### approval_threshold=-2
-The minimum predicted interaction energy reduction required to approve a modification. This parameter is only used if `scoring_strictness` is set to `strict`.
+- The minimum predicted interaction energy reduction required to approve a modification. This parameter is only used if `scoring_strictness` is set to `strict`.
 ### minimization_pH=7
-The pH at which the Amber minimization will be done during each cycle.
+- The pH at which the Amber minimization will be done during each cycle.
 ### pymol_command=pymol
-The command used to run PyMOL on shell. If typing `pymol` on your terminal doesn't activate PyMOL, you must change this parameter to the correct command, or the modification cycle will fail right after the modelling procedure, during Ab-Ag complex assembly.
+- The command used to run PyMOL on shell. If typing `pymol` on your terminal doesn't activate PyMOL, you must change this parameter to the correct command, or the modification cycle will fail right after the modelling procedure, during Ab-Ag complex assembly.
 ### scoring_method(ref15/csm)=ref15
-The scoring method used to predict the Ab-Ag interaction energy. Please note that REF15 (`ref15`) runs locally as part of pyrosetta, while CSM-AB (`csm`) uses an [external server](https://biosig.lab.uq.edu.au/csm_ab/api) to calculate the score, taking a longer time to get the result. 
+- The scoring method used to predict the Ab-Ag interaction energy. Please note that REF15 (`ref15`) runs locally as part of pyrosetta, while CSM-AB (`csm`) uses an [external server](https://biosig.lab.uq.edu.au/csm_ab/api) to calculate the score, taking a longer time to get the result. 
 ### germ_mode(free/restricted)=restricted
-Defines whether grafted sequences can come from any antibody (free) or only from antibodies with the same germline as the input (restricted).
+- Defines whether grafted sequences can come from any antibody (free) or only from antibodies with the same germline as the input (restricted).
 
 ### swap_h3|n_cycles=150
-Number of optimization cycles dedicated to CDR H3 grafting, if this module is executed.
+- Number of optimization cycles dedicated to CDR H3 grafting, if this module is executed.
 ### swap_h3|length_prob_mode(probabilistic/random/restricted)=restricted
-Determines the possible lengths of H3 CDRs that will be grafted for testing in this step. 
-`restricted` allows only H3 sequences with the same length as the input's CDR H3, or those with one more or one less residue than the input's CDR H3.
-`probabilistic` allows CDR H3 sequences of any length available in the dataset. It probabilistically selects a length based on the distribution of CDR H3 lengths in the dataset (i.e. very short and very long H3 sequences are less likely to be selected, while H3 sequences with 12-15 residues are the most likely to be selected. The weights can be found at ab-seldon/h3_bank/h3_length_distribution.csv.
-`random` allows CDR H3 sequences of any length available in the dataset. The length is chosen at random.
+- Determines the possible lengths of H3 CDRs that will be grafted for testing in this step. 
+- `restricted` allows only H3 sequences with the same length as the input's CDR H3, or those with one more or one less residue than the input's CDR H3.
+- `probabilistic` allows CDR H3 sequences of any length available in the dataset. It probabilistically selects a length based on the distribution of CDR H3 lengths in the dataset (i.e. very short and very long H3 sequences are less likely to be selected, while H3 sequences with 12-15 residues are the most likely to be selected. The weights can be found at ab-seldon/h3_bank/h3_length_distribution.csv.
+- `random` allows CDR H3 sequences of any length available in the dataset. The length is chosen at random.
 ### swap_h3|h3_rmsd_limit=3.0
-Discards any modifications whose resulting antibody model has any residue with an RMSD above the specified value, as measured by ImmuneBuilder's own built-in error prediction. The lower the value, the better the minimum quality of the models will be, but this will also increase the number of modifications rejected without evaluation by the scoring procedure. 
+- Discards any modifications whose resulting antibody model has any residue with an RMSD above the specified value, as measured by ImmuneBuilder's own built-in error prediction. The lower the value, the better the minimum quality of the models will be, but this will also increase the number of modifications rejected without evaluation by the scoring procedure. 
 
 ### swap_rep|max_cycles=150
-Number of optimization cycles dedicated to representative CDR grafting, if this module is executed.
+- Number of optimization cycles dedicated to representative CDR grafting, if this module is executed.
 ### swap_rep|cdr_prob(H1|H2|L1|L2|L3)=393|954|8957|359|241825
-The weights for probabilities of any of the non-H3 CDRs being selected for modification in each cycle. The default values are based on CDR diversity data calculated from human OAS sequences of naïve antibodies of healthy donors. Note that these probabilities are only used after the chain is selected, so H1 will only compete for selection with H2, while L1, L2 and L3 will only compete between themselves.
-To make the CDR selection random, simply change this parameter to `1|1|1|1|1`
-Any probabilities other than 0 are allowed. If, for example, modifications on CDR L1 must be prioritized, this parameter could be set to `1|1|999|1|1`. 
+- The weights for probabilities of any of the non-H3 CDRs being selected for modification in each cycle. The default values are based on CDR diversity data calculated from human OAS sequences of naïve antibodies of healthy donors. Note that these probabilities are only used after the chain is selected, so H1 will only compete for selection with H2, while L1, L2 and L3 will only compete between themselves.
+- To make the CDR selection random, simply change this parameter to `1|1|1|1|1`
+- Any probabilities other than 0 are allowed. If, for example, modifications on CDR L1 must be prioritized, this parameter could be set to `1|1|999|1|1`. 
 ### swap_rep|chain_prob(H|L)=22|16
-The weights for probabilities of either antibody chain being selected for modification.
+- The weights for probabilities of either antibody chain being selected for modification.
+
 
 ### swap_bnk|check_conf(yes/no)=yes
 Whether or not the conformation of the new grafted CDR should be checked, to allow only CDRs with the same conformation that existed prior to the beginning of this step (by default, this is the conformation resulting from the representative CDR swapping step). 
