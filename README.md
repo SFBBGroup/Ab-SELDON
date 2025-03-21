@@ -24,7 +24,7 @@ This pipeline requires the following software:
 
 ### Setup
 
-Ensure all requirements are installed correctly. In particular, use `python -m openmm.testInstallation` to see if OpenMM (on which ImmuneBuilder depends) is successfully computing forces with CUDA.
+Ensure all requirements are installed correctly. In particular, use `python -m openmm.testInstallation` to see if OpenMM (which is installed along with ImmuneBuilder) is successfully computing forces with CUDA.
 
 Once the required softwares are installed, enter the `ab-seldon/` folder and extract the pipeline's databases with:
 
