@@ -1,6 +1,6 @@
 # Settings file parameters
 The `swap_settings.cfg` file contains the parameters of the optimization run, allowing the user to tailor the pipeline to their use case. Here, these parameters are set to their default values.
-
+#
 ## Universal and preparation step settings
 ### prepare|input_name=[NAME]
 - Specifies the input files. Replace the `[NAME]` with the name of your fasta/pdb file (eg. `prepare|input_name=[NAME]` becomes `prepare|input_name=6phb` if your inputs are named `6phb.fasta` and `6phb.pdb`.
