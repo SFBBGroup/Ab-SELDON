@@ -8,8 +8,9 @@ To run an optimization example, simply enter either of these folders, extract th
 Version used in the paper's optimization experiments. 
 - While the individual modules can be run independently and in any order, this requires manual setup. 
 - The inputs must be named `complex_[NAME].pdb` and `[NAME].fasta`.
-- Uses the same settings used in the optimization tests of the paper.
+- Uses the same settings used in the optimization tests of the paper. Folders with settings files for diversity-guided (`diversity/`) or random (`random/`) optimizations are available.
 
+#
 ### ab-seldon-ready-v6.45
 Most current version of the pipeline as of march 2025. This new version has a few differences compared to the paper version.
 - The use of the optimization modules in non-default order and number has become much simpler with the introduction of the `steps` parameter. For more information, visit the [instructions for the configuration file](https://github.com/SFBBGroup/Ab-SELDON/blob/main/configuration_file_instructions.md).
