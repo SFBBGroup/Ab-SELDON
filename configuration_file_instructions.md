@@ -28,7 +28,7 @@ The `swap_settings.cfg` file contains the parameters of the optimization run, al
 - The scoring method used to predict the Ab-Ag interaction energy. Please note that REF15 (`ref15`) runs locally as part of pyrosetta, while CSM-AB (`csm`) uses an [external server](https://biosig.lab.uq.edu.au/csm_ab/api) to calculate the score, taking a longer time to get the result. 
 ### germ_mode(free/restricted)=restricted
 - Defines whether grafted sequences can come from any antibody (free) or only from antibodies with the same germline as the input (restricted).
-
+#
 ## CDR H3 grafting module settings
 ### swap_h3|n_cycles=150
 - Number of optimization cycles dedicated to CDR H3 grafting, if this module is executed.
@@ -39,7 +39,7 @@ The `swap_settings.cfg` file contains the parameters of the optimization run, al
 - `random` allows CDR H3 sequences of any length available in the dataset. The length is chosen at random.
 ### swap_h3|h3_rmsd_limit=3.0
 - Discards any modifications whose resulting antibody model has any residue with an RMSD above the specified value, as measured by ImmuneBuilder's own built-in error prediction. The lower the value, the better the minimum quality of the models will be, but this will also increase the number of modifications rejected without evaluation by the scoring procedure. 
-
+#
 ## Representative CDR grafting module settings
 ### swap_rep|max_cycles=150
 - Number of optimization cycles dedicated to representative CDR grafting, if this module is executed.
@@ -49,7 +49,7 @@ The `swap_settings.cfg` file contains the parameters of the optimization run, al
 - Any probabilities other than 0 are allowed. If, for example, modifications on CDR L1 must be prioritized, this parameter could be set to `1|1|999|1|1`. 
 ### swap_rep|chain_prob(H|L)=22|16
 - The weights for probabilities of either antibody chain being selected for modification.
-
+#
 ## OAS CDR grafting module settings
 ### swap_bnk|check_conf(yes/no)=yes
 - Whether or not the conformation of the new grafted CDR should be checked, to allow only CDRs with the same conformation that existed prior to the beginning of this step (by default, this is the conformation resulting from the representative CDR swapping step). 
@@ -63,7 +63,7 @@ The `swap_settings.cfg` file contains the parameters of the optimization run, al
 - The weights for probabilities of either antibody chain being selected for modification. Works the same way as the `swap_rep|chain_prob` parameter.
 ### swap_bnk|indel_prob(no_indel|del|ins)=955|26|19
 - The weights for probabilities of the new CDR sequence having the same length as before (`no_indel`), having one less residue than before (`del`), or having one more residue than before (`ins`). This parameters simulates the occurrence of indels in CDR sequences during the antibody maturation process.
-
+#
 ## Mutagenesis module settings
 ### mut|check_conf(yes/no)=yes
 - Whether or not the conformation of the new grafted CDR should be checked. Works the same way as the `swap_bnk|check_conf` parameter.
@@ -79,7 +79,7 @@ The `swap_settings.cfg` file contains the parameters of the optimization run, al
 - Whether or not the number of mutations directed to CDR H3 is set to 50% of all tested mutations. This option is available because of the extremely high diversity of CDR H3 compared to H1 and H2, which can lead to situations where these other two CDRs are never selected for mutagenesis. If `no` is selected, the CDR selection probabilities will simply follow the weights.
 ### mut|res_prob_mode(probabilistic/random)=probabilistic
 - Whether or not the mutations on the CDRs will be made at random (random position and random new residue) or will be weighted be the diversities of the different positions and the residues found in them in memory antibodies.
-
+#
 ## Framework grafting module settings
 ### memory_frame|num_hyb_struc=50
 - Number of hybrid structures (half memory, half naïve) that will be generated for each chain. That is, the number of memory heavy and light chain frameworks that will be grafted and modelled. For example, setting this parameter to 50 will result in the modelling of 50 hybrid antibodies with a memory framework in the heavy chain, and 50 antibodies with a memory framework in the light chain. Note that these hybrid antibodies are only modelled and have their conformations evaluated, no scoring procedure is performed. Therefore, this parameter can be set to higher numbers at little computational cost, if desired.
