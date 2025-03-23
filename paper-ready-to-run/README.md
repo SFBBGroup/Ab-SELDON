@@ -9,6 +9,7 @@ Version used in the paper's optimization experiments.
 - While the individual modules can be run independently and in any order, this requires manual setup. 
 - The inputs must be named `complex_[NAME].pdb` and `[NAME].fasta`.
 - Uses the same settings used in the optimization tests of the paper. Folders with settings files for diversity-guided (`diversity/`) or random (`random/`) optimizations are available.
+- Test data with the outputs described on the paper can be found on [Zenodo](https://zenodo.org/records/15066730).
 
 #
 ### ab-seldon-ready-v6.45
