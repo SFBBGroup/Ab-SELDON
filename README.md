@@ -32,7 +32,7 @@ Once the required softwares are installed, enter the `ab-seldon/` folder and ext
 
 #
 ## Usage
-> NOTE: Ready-to-run examples are available in the `paper-ready-to-run/` folder, requiring only the extraction of the databases and the execution of the `sh seldon.sh` command.
+> NOTE: Ready-to-run examples are available in the `paper-ready-to-run/` folder, requiring only the extraction of the databases and the execution of the `sh seldon.sh` command. More detailed information about these examples can be found [here](https://github.com/SFBBGroup/Ab-SELDON/blob/main/paper-ready-to-run/README.md). Test data with the inputs and outputs described on the paper can be found on [Zenodo](https://zenodo.org/records/15066730).
 
 ### Input
 The pipeline takes as input:
