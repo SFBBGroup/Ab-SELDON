@@ -24,4 +24,4 @@ To test the basic functionality of the pipeline's modules, you can set the `n_cy
 - `n_cycles`/`max_cycles` = 2
 - `num_fullmemory` = 1
 
-For more information about these parameters and how to edit the configuration file, visit the [instructions for the configuration file].(https://github.com/SFBBGroup/Ab-SELDON/blob/main/configuration_file_instructions.md).
+For more information about these parameters and how to edit the configuration file, visit the [instructions for the configuration file](https://github.com/SFBBGroup/Ab-SELDON/blob/main/configuration_file_instructions.md).
