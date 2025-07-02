@@ -17,7 +17,7 @@ The `swap_settings.cfg` file contains the parameters of the optimization run, al
 - Specifies the strictness of the scoring procedure. 
 - `metro` will approve any modifications that reduce the predicted interaction energy, while using the metropolis criterion to decide whether to approve modifications that increase the predicted interaction energy.
 - `normal` will approve any modifications that reduce the predicted interaction energy and reject any that don't.
-- `strict` will only approve modifications that reduce the predicted interaction energy by a specified amount (the `approval_threshold`) and reject any that don't.
+- `strict` will only approve modifications that reduce the predicted interaction energy by at least a specified amount (the `approval_threshold`) and reject any that don't.
 ### approval_threshold=-2
 - The minimum predicted interaction energy reduction required to approve a modification. This parameter is only used if `scoring_strictness` is set to `strict`.
 ### minimization_pH=7
