@@ -14,13 +14,14 @@ The utilization of predictive tools has become increasingly prevalent in the dev
 This pipeline requires the following software:
 - Python (tested versions: 3.11.6; 3.12.3)
 - [AmberMD and AmberTools](https://ambermd.org/GetAmber.php) (tested versions: Amber 22; Amber 24. IMPORTANT: CUDA and pmemd must be enabled)
--	[ImmuneBuilder](https://github.com/oxpig/ImmuneBuilder) (tested versions: 1.0.1; 1.1.1)
 -	[PyRosetta](https://www.pyrosetta.org/downloads#h.6vttn15ac69d) (tested versions: pyrosetta-2023.36; pyrosetta-2024.19)
+-	[ImmuneBuilder](https://github.com/oxpig/ImmuneBuilder) (tested versions: 1.0.1; 1.1.1)
 -	[PDB2PQR](https://pdb2pqr.readthedocs.io/en/latest/getting.html#python-package-installer-pip) (tested version: 3.6.1)
 -	[ANARCI](https://github.com/oxpig/ANARCI) 
 -	[BLAST](https://www.ncbi.nlm.nih.gov/books/NBK52640/) (tested versions: 2.12.0; 2.15.0)
 -	[pdb-tools](https://github.com/haddocking/pdb-tools) (tested version: 2.5.0)
 -	[PyMOL](https://github.com/schrodinger/pymol-open-source) (tested versions: 2.6.0a0; 3.0)
+
 
 ### Setup
 
