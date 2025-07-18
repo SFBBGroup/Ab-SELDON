@@ -11,16 +11,22 @@ The utilization of predictive tools has become increasingly prevalent in the dev
 
 ### Requirements
 
-This pipeline requires the following software:
+This pipeline requires [AmberMD and AmberTools](https://ambermd.org/GetAmber.php) (tested versions: Amber 22; Amber 24. IMPORTANT: CUDA and pmemd must be enabled). Install it before installing the other requirements.
+
+After installing AmberMD, install the other requirements on a conda environment using the provided .yaml file:
+`conda env create -f ab-seldon-env.yaml`
+
+The pipeline has been previously tested with the following versions of the required programs:
 - Python (tested versions: 3.11.6; 3.12.3)
 - [AmberMD and AmberTools](https://ambermd.org/GetAmber.php) (tested versions: Amber 22; Amber 24. IMPORTANT: CUDA and pmemd must be enabled)
 -	[PyRosetta](https://www.pyrosetta.org/downloads#h.6vttn15ac69d) (tested versions: pyrosetta-2023.36; pyrosetta-2024.19)
+-	[OpenMM](https://anaconda.org/conda-forge/openmm) (tested version: 8.1.2)
 -	[ImmuneBuilder](https://github.com/oxpig/ImmuneBuilder) (tested versions: 1.0.1; 1.1.1)
 -	[PDB2PQR](https://pdb2pqr.readthedocs.io/en/latest/getting.html#python-package-installer-pip) (tested version: 3.6.1)
 -	[ANARCI](https://github.com/oxpig/ANARCI) 
 -	[BLAST](https://www.ncbi.nlm.nih.gov/books/NBK52640/) (tested versions: 2.12.0; 2.15.0)
 -	[pdb-tools](https://github.com/haddocking/pdb-tools) (tested version: 2.5.0)
--	[PyMOL](https://github.com/schrodinger/pymol-open-source) (tested versions: 2.6.0a0; 3.0)
+-	[PyMOL](https://github.com/schrodinger/pymol-open-source) (tested versions: 2.6.0a0; 3.0) 
 
 
 ### Setup
@@ -30,6 +36,11 @@ Ensure all requirements are installed correctly. In particular, use `python -m o
 Once the required softwares are installed, enter the `ab-seldon/` folder and extract the pipeline's databases with:
 
 ` $ unrar x ab-seldon-databases.rar `
+
+This should extract the folders `cdr_bnk`, `h3_bank`, `ref_seq` and `mem_mutation_data` to the same `ab-seldon/` folder you found the `ab-seldon-databases.rar` file.
+
+To start using Ab-SELDON, activate its environment:
+`conda activate abseldon`
 
 #
 ## Usage
