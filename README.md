@@ -54,7 +54,7 @@ The pipeline takes as input:
 1) A fasta file *[NAME].fasta* with ONLY the sequence of the initial antibody that will be optimized. The heavy chain MUST come before the light chain;
 2) A PDB file *[NAME].pdb* (same name as the fasta) with the initial antibody-antigen complex whose interaction will be optimized. It must contain only one antibody molecule and its antigen. The antibody chains must be named H and L. It must not contain heteroatoms, only proteins.
 
-These files must be put into the pipeline's main folder, `ab-seldon/`. Important: Do not include underlines on your *[NAME]*.
+These files must be put into the pipeline's main folder, `ab-seldon/`. Important: Do not include underlines ("_") on your *[NAME]*.
 
 ### Setting up an optimization run
 To configure your optimization run, you must edit the configuration file (`swap_settings.cfg`), located in the main folder. If you wish to run the pipeline with its default settings, simply edit the first parameter (prepare|input_name=) to replace the `[NAME]` with the name of your fasta/pdb file (eg. `prepare|input_name=[NAME]` becomes `prepare|input_name=6phb` if your inputs are named `6phb.fasta` and `6phb.pdb`)
