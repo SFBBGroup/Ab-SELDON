@@ -1,0 +1,24 @@
+name: abseldon
+channels:
+  - conda-forge
+  - bioconda
+  - defaults
+  - https://conda.rosettacommons.org
+
+dependencies:
+  - python=3.12.3
+  - openmm=8.1.2
+  - pdbfixer
+  - pdb2pqr=3.6.1
+  - anarci
+  - pip:
+    - ImmuneBuilder==1.1.1
+
+  - blast=2.15.0
+  - pdb-tools=2.5.0
+  - pymol-open-source=3.0.0
+  - pip
+  - ncbi-acc-download
+  - wget
+  - pyrosetta
+
