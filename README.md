@@ -15,6 +15,7 @@ After installing AmberMD, install the other requirements on a conda environment 
 
 `conda env create -f ab-seldon-env.yaml`
 
+
 ### Tested versions of required softwares
 
 The pipeline has been previously tested with the following versions of the required programs:
@@ -38,9 +39,10 @@ Once the required softwares are installed, enter the `ab-seldon/` folder and ext
 
 ` $ unrar x ab-seldon-databases.rar `
 
-This should extract the folders `cdr_bnk`, `h3_bank`, `ref_seq` and `mem_mutation_data` to the same `ab-seldon/` folder you found the `ab-seldon-databases.rar` file.
+This should extract the folders `cdr_bnk`, `h3_bank`, `ref_seq` and `mem_mutation_data` to the same `ab-seldon/` folder where you found the `ab-seldon-databases.rar` file.
 
 To start using Ab-SELDON, activate its environment:
+
 `conda activate abseldon`
 
 #
