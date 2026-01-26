@@ -4,14 +4,22 @@ Antibody Structural Enhancement Leveraging Diversity for Optimization of iNterac
 Paper: [Ab-SELDON: Leveraging Diversity Data for an Efficient Automated Computational Pipeline for Antibody Design](https://doi.org/10.1021/acs.jcim.5c01924)
 
 ## Abstract
-The utilization of predictive tools has become increasingly prevalent in the development of biopharmaceuticals, reducing the time and cost of research. However, most methods for computational antibody design are hampered by their reliance on scarcely available antibody structures, potential for immunogenic modifications, and a restricted exploration of the paratope's potential chemical and conformational space. We propose Ab-SELDON, a modular and easily customizable antibody design pipeline capable of iteratively optimizing an antibody-antigen (Ab-Ag) interaction in five different modification steps, including CDR and framework grafting, and mutagenesis. The optimization process is guided by diversity data collected from millions of publicly available human antibody sequences. This approach enhanced the exploration of the chemical and conformational space of the paratope during computational tests involving the optimization of an anti-HER2 antibody. Optimization of another antibody against Gal-3BP stabilized the Ab-Ag interaction in molecular dynamics simulations. Tests with SKEMPI’s Ab-Ag mutations also demonstrated the pipeline’s ability to correctly identify the effect of the majority of mutations, especially those that increased binding affinity.
+The utilization of predictive tools has become increasingly prevalent in the development of biopharmaceuticals, reducing the time and cost of research. However, most methods for computational antibody design are hampered by their reliance on scarcely available antibody structures, potential for immunogenic modifications, and a restricted exploration of the paratope's potential chemical and conformational space. We propose Ab-SELDON, a modular and easily customizable antibody design pipeline capable of iteratively optimizing an antibody-antigen (Ab-Ag) interaction in five different modification steps, including CDR and framework grafting, and mutagenesis. The optimization process is guided by diversity data collected from millions of publicly available human antibody sequences. This approach enhanced the exploration of the chemical and conformational space of the paratope during computational tests involving the optimization of an anti-HER2 antibody. Optimization of another antibody against Gal-3BP stabilized the Ab-Ag interaction in molecular dynamics simulations at lower runtime than alternative pipelines. Tests with SKEMPI’s Ab-Ag mutations also demonstrated the pipeline’s ability to correctly identify the effect of the majority of mutations, especially multipoint and those that increased binding affinity. This freely available pipeline presents a new approach for computationally efficient and automated in silico antibody design, thereby facilitating the development of new biopharmaceuticals.
+
+#
+## Update: Ab-SELDON v7.0
+Version 7.0 introduces two important improvements:
+
+1) DSSP is now used to avoid the loss of antigen secondary structure when a new complex is assembled during CDR grafting steps;
+2) The detection and elimination of possible chain entanglements (which can happen during complex assembly in CDR grafting steps) has been greatly improved
 
 #
 ## Installation
 
-This pipeline requires [AmberMD and AmberTools](https://ambermd.org/GetAmber.php) (tested versions: Amber 22; Amber 24. IMPORTANT: CUDA and pmemd must be enabled). Install it before installing the other requirements.
 
-After installing AmberMD, install the other requirements on a conda environment using the provided .yaml file:
+This pipeline requires [AmberMD and AmberTools](https://ambermd.org/GetAmber.php) (tested versions: Amber 22; Amber 24. IMPORTANT: CUDA and pmemd must be enabled) and [DSSP](https://github.com/PDB-REDO/dssp) (tested version: 4.4.7). Install them before installing the other requirements.
+
+After installing AmberMD and DSSP, install the other requirements on a conda environment using the provided .yaml file:
 
 `conda env create -f ab-seldon-env.yaml`
 
@@ -19,8 +27,9 @@ After installing AmberMD, install the other requirements on a conda environment 
 ### Tested versions of required softwares
 
 The pipeline has been previously tested with the following versions of the required programs:
-- Python (tested versions: 3.11.6; 3.12.3)
-- [AmberMD and AmberTools](https://ambermd.org/GetAmber.php) (tested versions: Amber 22; Amber 24. IMPORTANT: CUDA and pmemd must be enabled)
+- 	Python 3 (tested versions: 3.11.6; 3.12.3)
+- 	[AmberMD and AmberTools](https://ambermd.org/GetAmber.php) (tested versions: Amber 22; Amber 24. IMPORTANT: CUDA and pmemd must be enabled)
+-	[DSSP](https://github.com/PDB-REDO/dssp) (tested version: 4.4.7)
 -	[PyRosetta](https://www.pyrosetta.org/downloads#h.6vttn15ac69d) (tested versions: pyrosetta-2023.36; pyrosetta-2024.19)
 -	[OpenMM](https://anaconda.org/conda-forge/openmm) (tested version: 8.1.2)
 -	[ImmuneBuilder](https://github.com/oxpig/ImmuneBuilder) (tested versions: 1.0.1; 1.1.1)
@@ -54,7 +63,7 @@ The pipeline takes as input:
 1) A fasta file *[NAME].fasta* with ONLY the sequence of the initial antibody that will be optimized. The heavy chain MUST come before the light chain;
 2) A PDB file *[NAME].pdb* (same name as the fasta) with the initial antibody-antigen complex whose interaction will be optimized. It must contain only one antibody molecule and its antigen. The antibody chains must be named H and L. It must not contain heteroatoms, only proteins.
 
-These files must be put into the pipeline's main folder, `ab-seldon/`. Important: Do not include underlines ("_") on your *[NAME]*.
+These files must be put into the pipeline's main folder, `ab-seldon/`. 
 
 ### Setting up an optimization run
 To configure your optimization run, you must edit the configuration file (`swap_settings.cfg`), located in the main folder. If you wish to run the pipeline with its default settings, simply edit the first parameter (prepare|input_name=) to replace the `[NAME]` with the name of your fasta/pdb file (eg. `prepare|input_name=[NAME]` becomes `prepare|input_name=6phb` if your inputs are named `6phb.fasta` and `6phb.pdb`)
@@ -70,7 +79,7 @@ After these steps, run the pipeline by simply executing the main script:
 ` $ sh seldon.sh `
 
 ### Output
-After the optimization process is concluded, the output files with the optimized antibody and antibody-antigen complex will be identified with a `FINAL` prefix:
+After the optimization process is concluded, the output files with the optimized antibody and antibody-antigen complex will be identified with a `FINAL` prefix, such as:
 
 - complex_FINAL(...).pdb
 - FINAL(...).fasta
