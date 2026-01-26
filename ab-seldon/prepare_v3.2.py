@@ -1,6 +1,6 @@
-
 import os
 import subprocess
+import csv
 import time
 import re
 import glob
@@ -9,6 +9,7 @@ from contextlib import redirect_stdout
 from itertools import count
 from ImmuneBuilder import ABodyBuilder2
 from ImmuneBuilder.refine import refine
+
 predictor = ABodyBuilder2(numbering_scheme="martin")
 
 
@@ -20,8 +21,146 @@ class ClearCache:
         torch.cuda.empty_cache()
 
 
+def create_epitope_pml(pdb_file, radius="6", pml_path="epitope.pml"):
+    """Generate PyMOL script to identify epitope residues"""
+    pdb_name = os.path.splitext(os.path.basename(pdb_file))[0]
+    # Radius is now passed as an argument, default is "6" if not specified
+    pml_content = f"""load {pdb_file}
+select Ab, chain H+L
+select Ag, byres (({pdb_name} within {radius} of Ab) and not Ab)
+
+stored.residues = []
+iterate (Ag), stored.residues.append(chain + "/" + resi)
+
+python
+for r in sorted(set(stored.residues)):
+    print(r)
+python end"""
+
+    with open(pml_path, 'w') as f:
+        f.write(pml_content)
+
+
+def run_epitope_script(pml_path="epitope.pml", pymol_command="pymol.exe"):
+    """Execute PyMOL script and extract epitope residues"""
+    cmd = f'"{pymol_command}" -qc "{pml_path}"'
+
+    result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+    stdout = result.stdout
+
+    # Filter output: keep only "chain/residue" format lines
+    residues = []
+    for line in stdout.splitlines():
+        line = line.strip()
+        if "/" in line and len(line.split("/")) == 2:
+            if '"' not in line and '(' not in line and ')' not in line and '>' not in line:
+                residues.append(line)
+
+    return residues
+
+
+def calculate_DSSP(pdb_file):
+    """Run DSSP and return parsed data as list of dictionaries"""
+    filename = os.path.splitext(os.path.basename(pdb_file))[0]
+    dssp_file = f'{filename}.dssp'
+
+    try:
+        subprocess.run(
+            f"mkdssp {pdb_file} --output-format dssp > {dssp_file}",
+            shell=True,
+            check=True,
+            stderr=subprocess.DEVNULL
+        )
+    except subprocess.CalledProcessError as e:
+        raise RuntimeError(f"Error running DSSP on {pdb_file}") from e
+
+    dssp_data = []
+    with open(dssp_file, 'r') as f:
+        lines = f.readlines()
+
+        # Find data start
+        start_idx = None
+        for i, line in enumerate(lines):
+            if 'RESIDUE AA' in line:
+                start_idx = i + 1
+                break
+
+        if start_idx is None:
+            raise RuntimeError("Could not find RESIDUE AA header in DSSP file")
+
+        # Parse residues
+        for line in lines[start_idx:]:
+            if len(line) < 20:
+                continue
+
+            residue_num = line[5:10].strip()
+            chain = line[11].strip()
+            ss = line[16].strip()
+            if ss == '':
+                ss = ' '
+
+            dssp_data.append({
+                'residue_num': residue_num,
+                'chain': chain,
+                'secondary_structure': ss
+            })
+
+    if os.path.exists(dssp_file):
+        os.remove(dssp_file)
+
+    return dssp_data
+
+
+def DSSP_simple(pdb_file, pymol_command, latest_ab_complex, epitope_radius="6", pml_path="epitope.pml"):
+    """
+    Analyze structure and export epitope residues with secondary structure to CSV.
+
+    Returns: List of dictionaries with keys 'chain/resnumber', 'DSSP_code'
+    """
+    # Pass the radius to the PML generator
+    create_epitope_pml(pdb_file, epitope_radius, pml_path)
+
+    # Get epitope residues
+    residues = run_epitope_script(pml_path, pymol_command)
+
+    if not residues:
+        raise RuntimeError("No epitope residues found!")
+
+    # Run DSSP
+    print("Running DSSP analysis...")
+    dssp_data = calculate_DSSP(pdb_file)
+
+    if dssp_data is None or len(dssp_data) == 0:
+        raise RuntimeError("DSSP analysis failed!")
+
+    # Match epitope residues with DSSP data
+    results = []
+    for residue in residues:
+        chain, res_num = residue.split('/')
+
+        # Find matching entry in dssp_data
+        ss_code = None
+        for entry in dssp_data:
+            if entry['chain'] == chain and entry['residue_num'] == res_num:
+                ss_code = entry['secondary_structure']
+                break
+
+        results.append({'chain/resnumber': residue, 'DSSP_code': ss_code})
+
+    output_csv = latest_ab_complex.split("_")[3] + "_" + latest_ab_complex.split("_")[4] + "_epitope-DSSP.csv"
+
+    # Export to CSV using csv module
+    with open(output_csv, 'w', newline='') as csvfile:
+        fieldnames = ['chain/resnumber', 'DSSP_code']
+        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(results)
+
+    return results
+
+
 def gen_script(steps, vers):
-    step_list = steps.replace("\n","").replace("\r","").split("|")
+    step_list = steps.replace("\n", "").replace("\r", "").split("|")
     opt_script = open("optimize.sh", "a", newline="")
     with redirect_stdout(opt_script):
         for stp in step_list:
@@ -41,19 +180,21 @@ def model_ab():
     print("Modelling new antibody...")
     sequences = {}
 
-    header_H = ">" + input_name + "|H|" + str(cdr_lengths[0]) + "|" + str(cdr_lengths[1]) + "|" + str(cdr_lengths[2]) + "|" + germlines[0] + "|"
-    header_L = ">" + input_name + "|L|" + str(cdr_lengths[3]) + "|" + str(cdr_lengths[4]) + "|" + str(cdr_lengths[5]) + "|" + \
+    header_H = ">" + input_name_sanitized + "|H|" + str(cdr_lengths[0]) + "|" + str(cdr_lengths[1]) + "|" + str(
+        cdr_lengths[2]) + "|" + germlines[0] + "|"
+    header_L = ">" + input_name_sanitized + "|L|" + str(cdr_lengths[3]) + "|" + str(cdr_lengths[4]) + "|" + str(
+        cdr_lengths[5]) + "|" + \
                germlines[1] + "|"
- 
+
     sequences["H"] = "".join([str(item) for item in [b for b in H_seq if not b == "-"]])
     sequences["L"] = "".join([str(item) for item in [b for b in L_seq if not b == "-"]])
-    
+
     output_file = filename + ".pdb"
 
     with ClearCache():
         antibody = predictor.predict(sequences)
         antibody.save(output_file, check_for_strained_bonds=False)
-    
+
     make_fasta = output_file.replace(".pdb", ".fasta")
     with redirect_stdout(open(make_fasta, "w", newline="")):
         print(header_H)
@@ -63,7 +204,7 @@ def model_ab():
 
 
 def ter_fix():
-    #Fixing possible incorrect chain terminations introduced by pdb4amber
+    # Fixing possible incorrect chain terminations introduced by pdb4amber
     for ter in glob.glob("out_pdb4amber-addH-preterfix.pdb"):
         with open(ter, "r") as f_in, open("out_pdb4amber-addH.pdb", "w") as f_out:
             lines = f_in.readlines()
@@ -111,8 +252,9 @@ def fix_md_models(chain_ids, latest_ab):
                     current_chain_id = chain_ids[0]
                 if line.startswith(("ATOM", "TER", "HETATM")):
                     if "LYN" in line:
-                        new_line = line[:21].replace("LYN", "LYS").replace("HETATM", "ATOM  ") + current_chain_id + line[
-                                                                                                                    22:]
+                        new_line = line[:21].replace("LYN", "LYS").replace("HETATM",
+                                                                           "ATOM  ") + current_chain_id + line[
+                                                                                                          22:]
                         f_out.write(new_line)
                     else:
                         new_line = line[:21] + current_chain_id + line[22:]
@@ -239,6 +381,69 @@ def new_complex(latest_ab, latest_complex, latest_ab_complex, temporary, no_heta
     fix_md_models(chain_ids, latest_ab)
 
 
+def second_minimization(latest_ab, latest_ab_complex, temporary, no_hetatm, renum, epitope_radius="6"):
+    # Checks the affinity score of the antibody structure against the target protein
+    print("Starting evaluation protocol...")
+    # Alignment and assembly of new Ab-Ag complex
+    with redirect_stdout(open("pymol_min2.pml", "w", newline="")):
+        print("load " + latest_ab_complex)
+        print("get_chains")
+
+    run_pml_cmd = str(pymol_command + " -qc pymol_min2.pml")
+    out = subprocess.run(run_pml_cmd, shell=True, capture_output=True)
+    pml_out = out.stdout.decode("utf-8")
+    not_chains = ["\'", "[", "]", " ", ",", "\n"]
+
+    chain_ids = [ch for ch in pml_out.split("cmd.get_chains:")[-1] if ch not in not_chains]
+
+    # Removal of heteroatoms
+    pdb_line_list = open(latest_ab_complex).readlines()
+    for non_hetatm in pdb_line_list:
+        if not non_hetatm.startswith("HETATM"):
+            save = open(temporary + no_hetatm + "_" + latest_ab_complex, "a", newline="")
+            with redirect_stdout(save):
+                print(non_hetatm.replace("\n", "").replace("\r", ""))
+
+    # Refinement with OpenMM
+    print("Refining complex side chains...")
+    with ClearCache():
+        refine(temporary + no_hetatm + "_" + latest_ab_complex, temporary + no_hetatm + "_" + latest_ab_complex)
+
+    try:
+        # Removal of insertion codes from pdb complex
+        cmd_renum = "pdb_fixinsert " + temporary + no_hetatm + "_" + latest_ab_complex + " > " + temporary + no_hetatm + renum + "_" + latest_ab_complex
+        subprocess.run(cmd_renum, shell=True, capture_output=True)
+        # Protonation adjustment with propka
+        cmd_prot = "pdb2pqr30 --with-ph " + ph + " --ff AMBER --ffout AMBER --pdb-output out_pdb2pqr.pdb --titration-state-method propka " + temporary + no_hetatm + renum + "_" + latest_ab_complex + " out_pdb2pqr.pqr"
+        # pdb4amber
+        cmd_pdb4amber = "pdb4amber -i out_pdb2pqr.pdb -o out_pdb4amber-addH-preterfix.pdb"
+        # Sampling with Amber MD
+        cmd_md = "sh min_imp.sh"
+
+        print("Running minimization...")
+        subprocess.run(cmd_prot, shell=True, capture_output=True)
+        subprocess.run(cmd_pdb4amber, shell=True, capture_output=True)
+        # Fixing incorrect chain terminations
+        ter_fix()
+        subprocess.run(cmd_md, shell=True, capture_output=True)
+
+    except:
+        print("Minimization failure. Check amber log files and aligned complex for more information.")
+        cmd_bkp_error = "tar -cvf " + latest_ab + " _error.tar out* *.out *.info *.rst7 *.crd *.leap *.pqr *.parm7 *.mdinfo *.mdout *.nc temp*"
+        subprocess.run(cmd_bkp_error, shell=True, capture_output=True)
+
+    fix_md_models(chain_ids, latest_ab)
+
+    # Pass the parsed epitope_radius to the DSSP function
+    DSSP_simple("SCO_out-min.pdb", pymol_command, latest_ab_complex, epitope_radius)
+
+    for rep in glob.glob("out-min.pdb"):
+        rep_chain = "CHN_" + rep
+        rep_score = "SCO_" + rep
+        cmd_del_int = "rm " + rep_chain + " " + rep + " " + rep_score + " out* *.out *.info *.rst7 *.crd *.leap *.pqr *.parm7 *.mdinfo *.mdout *.nc out* temp*"
+        subprocess.run(cmd_del_int, shell=True, capture_output=True)
+
+
 def scoring():
     # Running CSM-AB or Rosetta (REF15 score) to calculate the interaction score of the new complex
     print("Scoring...")
@@ -255,8 +460,9 @@ def scoring():
                 out_csm_cln = out_csm.stdout.decode("utf-8")
 
                 if not "Please provide the Ab-Ag complex" in out_csm_cln and not out_csm_cln == "":
-                    job_id = str(out_csm_cln.split("{\"job_id\": ")[-1].replace("}", "").replace("\"", "")).replace("\n",
-                                                                                                                    "")
+                    job_id = str(out_csm_cln.split("{\"job_id\": ")[-1].replace("}", "").replace("\"", "")).replace(
+                        "\n",
+                        "")
                     print("Starting CSM-AB. Job id is " + job_id)
 
                     csm_ab_done = False
@@ -350,6 +556,7 @@ def scoring():
 ##########
 # Reading configuration file
 input_name = "cfg:prepare|input_name"
+input_name_sanitized = "optional"
 num_struc = "cfg:prepare|num_struc"
 code_name = "cfg:prepare|code_name"
 vers = "cfg:prepare|seldon_version"
@@ -357,6 +564,7 @@ steps = "cfg:steps"
 scoring_method = "cfg:scoring_method"
 ph = "7"
 pymol_command = "pymol"
+epitope_radius = "6"  # Default value
 
 cfg = open("swap_settings.cfg").readlines()
 
@@ -374,14 +582,18 @@ for setting in cfg:
     if "prepare|code_name" in setting:
         code_name = str(setting.split("=")[1].replace("\n", ""))
     if "prepare|input_name" in setting:
-        input_name = str(setting.split("=")[1].replace("\n", "")).replace(".pdb","").replace(".fasta","")
+        input_name = str(setting.split("=")[1].replace("\n", "")).replace(".pdb", "").replace(".fasta", "")
+        input_name_sanitized = input_name.replace("_", "-")
     if "prepare|seldon_version" in setting:
         vers = str(setting.split("=")[1].replace("\n", ""))
+    if "epitope_dist_radius" in setting:
+        epitope_radius = str(setting.split("=")[1].replace("\n", ""))
 
 print("Starting pipeline: Input preparation")
 
 if scoring_method == "ref15":
     from pyrosetta import *
+
     init("-mute all")
 
 CDRH1_res = [26, 32]
@@ -393,10 +605,10 @@ CDRL3_res = [89, 97]
 
 counter = ("%03i" % i for i in count(1))
 
-for amount in range(1,(int(num_struc) + 1)):
+for amount in range(1, (int(num_struc) + 1)):
     fasta = input_name + ".fasta"
     number = next(counter)
-    filename = "bs1_" + number + "_" + input_name.replace("_","-") + "_" + code_name + "_000001"
+    filename = "bs1_" + number + "_" + input_name_sanitized + "_" + code_name + "_000001"
     complex_filename = "complex_" + filename + ".pdb"
 
     # Run anarci to collect information about the antibody
@@ -410,7 +622,7 @@ for amount in range(1,(int(num_struc) + 1)):
 
     open_num = open(os.path.join(os.getcwd(), filename + ".anarci"), "r", newline='')
     germlines = []
-    cdr_seqs = {"H1":[],"H2":[],"H3":[],"L1":[],"L2":[],"L3":[]}
+    cdr_seqs = {"H1": [], "H2": [], "H3": [], "L1": [], "L2": [], "L3": []}
     cdr_lengths = []
     H_seq = []
     L_seq = []
@@ -423,11 +635,12 @@ for amount in range(1,(int(num_struc) + 1)):
             ch = num.split(" ")[0]
             num_res = num.split(" ")[1]
             amino = (num.split(" ")[-1]).replace("\n", "")
-            
+
             locals()[ch + "_seq"].append(amino)
 
-            for i in range(1,4):
-                if int(num_res) >= locals()["CDR" + ch + str(i) + "_res"][0] and int(num_res) <= locals()["CDR" + ch + str(i) + "_res"][-1]:
+            for i in range(1, 4):
+                if int(num_res) >= locals()["CDR" + ch + str(i) + "_res"][0] and int(num_res) <= \
+                        locals()["CDR" + ch + str(i) + "_res"][-1]:
                     cdr_seqs.get(ch + str(i)).append(amino)
 
     for key, value in cdr_seqs.items():
@@ -444,10 +657,14 @@ for amount in range(1,(int(num_struc) + 1)):
 
     new_complex(latest_ab, latest_complex, latest_ab_complex, temporary, no_hetatm, renum)
     scoring()
+
+    # Passed epitope_radius to second_minimization
+    second_minimization(latest_ab, latest_ab_complex, temporary, no_hetatm, renum, epitope_radius)
     gen_script(steps, vers)
 
     # Updating the .anarci file
-    cmd = str("ANARCI -i " + filename + ".fasta -s martin -o " + filename + ".anarci -p 8 --assign_germline --use_species human")
+    cmd = str(
+        "ANARCI -i " + filename + ".fasta -s martin -o " + filename + ".anarci -p 8 --assign_germline --use_species human")
     out = subprocess.run(cmd, shell=True, capture_output=True)
 
 print("Input preparation completed")

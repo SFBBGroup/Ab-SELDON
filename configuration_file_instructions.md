@@ -28,6 +28,10 @@ The `swap_settings.cfg` file contains the parameters of the optimization run, al
 - The scoring method used to predict the Ab-Ag interaction energy. Please note that REF15 (`ref15`) runs locally as part of pyrosetta, while CSM-AB (`csm`) uses an [external server](https://biosig.lab.uq.edu.au/csm_ab/api) to calculate the score, taking a longer time to get the result. 
 ### germ_mode(free/restricted)=restricted
 - Defines whether grafted sequences can come from any antibody (free) or only from antibodies with the same germline as the input (restricted).
+### DSSP_changes_tolerance=3
+- Defines how many epitope residues can have their DSSP secondary structure changed during the modification process. Higher numbers can result in the loss of secondary structure by the antigen during CDR grafting.
+### epitope_dist_radius=6
+- Epitope residues are defined as all antigen residues that are up to this distance from the antibody. These are the residues analyzed by DSSP.
 #
 ## CDR H3 grafting module settings
 ### swap_h3|n_cycles=150

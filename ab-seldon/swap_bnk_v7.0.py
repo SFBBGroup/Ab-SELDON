@@ -1,4 +1,3 @@
-
 import glob
 import os
 import os.path
@@ -9,10 +8,12 @@ import time
 import re
 import torch
 import linecache
+import csv
 from os import path
 from contextlib import redirect_stdout
 from ImmuneBuilder import ABodyBuilder2
 from ImmuneBuilder.refine import refine
+
 predictor = ABodyBuilder2(numbering_scheme="martin")
 
 
@@ -24,19 +25,197 @@ class ClearCache:
         torch.cuda.empty_cache()
 
 
+def calculate_DSSP(pdb_file):
+    """Run DSSP analysis and return list of dictionaries with residue secondary structures"""
+    filename = os.path.splitext(os.path.basename(pdb_file))[0]
+    dssp_file = f'{filename}.dssp'
+
+    try:
+        subprocess.run(
+            f"mkdssp {pdb_file} --output-format dssp > {dssp_file}",
+            shell=True,
+            check=True,
+            stderr=subprocess.DEVNULL
+        )
+    except subprocess.CalledProcessError as e:
+        raise RuntimeError(f"Error running DSSP on {pdb_file}") from e
+
+    dssp_data = []
+    with open(dssp_file, 'r') as f:
+        lines = f.readlines()
+        start_idx = None
+        for i, line in enumerate(lines):
+            if 'RESIDUE AA' in line:
+                start_idx = i + 1
+                break
+
+        if start_idx is None:
+            raise RuntimeError("Could not find RESIDUE AA header in DSSP file")
+
+        for line in lines[start_idx:]:
+            if len(line) < 20:
+                continue
+            dssp_data.append({
+                'residue_num': line[5:10].strip(),
+                'chain': line[11].strip(),
+                'secondary_structure': line[16].strip() if line[16].strip() else ' '
+            })
+
+    if os.path.exists(dssp_file):
+        os.remove(dssp_file)
+
+    return dssp_data
+
+
+def get_ss_description(code):
+    """Convert DSSP single-letter code to human-readable description"""
+    ss_map = {
+        'H': 'Alpha helix', 'B': 'Beta bridge', 'E': 'Strand',
+        'G': 'Helix_3', 'I': 'Helix_5', 'P': 'Helix_PPII',
+        'T': 'Turn', 'S': 'Bend', ' ': 'Loop'
+    }
+    return ss_map.get(code, 'Unknown')
+
+
+def get_structure_category(ss_code):
+    """Classify DSSP code into low_order, beta, or helix category"""
+    structure_types = {
+        'low_order': ['T', 'S', ' '],
+        'beta': ['B', 'E'],
+        'helix': ['H', 'G', 'I', 'P']
+    }
+    for category, codes in structure_types.items():
+        if ss_code in codes:
+            return category
+    return 'unknown'
+
+
+def is_change_acceptable(ref_ss, comp_ss):
+    """Determine if secondary structure change meets acceptability criteria"""
+    ref_cat = get_structure_category(ref_ss)
+    comp_cat = get_structure_category(comp_ss)
+
+    if ref_cat == comp_cat:
+        return True
+    if ref_cat == 'low_order' and comp_cat in ['beta', 'helix']:
+        return True
+
+    # Note: B -> low_order is technically a loss of structure, so it returns False here.
+    # The tolerance for the "first" B->low change is handled in compare_epitope_DSSP.
+    return False
+
+
+def compare_epitope_DSSP(reference_csv, comparison_pdb, output_csv=None, tolerance=3):
+    """Compare epitope secondary structures between reference CSV and comparison PDB"""
+    if not os.path.exists(reference_csv):
+        raise FileNotFoundError(f"Reference CSV not found: {reference_csv}")
+
+    # Read reference CSV
+    ref_data = []
+    with open(reference_csv, 'r', newline='') as csvfile:
+        reader = csv.DictReader(csvfile)
+        columns = reader.fieldnames
+
+        if 'chain/resnumber' not in columns or 'DSSP_code' not in columns:
+            raise ValueError("CSV must contain 'chain/resnumber' and 'DSSP_code' columns")
+
+        for row in reader:
+            ref_data.append(row)
+
+    print("Checking epitope secondary structure with DSSP...")
+    dssp_compare = calculate_DSSP(comparison_pdb)
+
+    if len(dssp_compare) == 0:
+        raise RuntimeError("DSSP analysis produced no data for comparison structure")
+
+    changes = []
+    b_to_low_changes = []
+
+    for row in ref_data:
+        residue = row['chain/resnumber']
+        ref_ss = row['DSSP_code']
+        chain, res_num = residue.split('/')
+
+        # Find matching entry in dssp_compare
+        comp_ss = None
+        for entry in dssp_compare:
+            if entry['chain'] == chain and entry['residue_num'] == res_num:
+                comp_ss = entry['secondary_structure']
+                break
+
+        if comp_ss is None:
+            continue
+
+        if ref_ss != comp_ss:
+            changes.append({
+                'residue': residue,
+                'reference_DSSP': ref_ss,
+                'comparison_DSSP': comp_ss,
+                'reference_description': get_ss_description(ref_ss),
+                'comparison_description': get_ss_description(comp_ss),
+                'reference_category': get_structure_category(ref_ss),
+                'comparison_category': get_structure_category(comp_ss)
+            })
+
+            if ref_ss == 'B' and get_structure_category(comp_ss) == 'low_order':
+                b_to_low_changes.append(residue)
+
+    b_to_low_count = len(b_to_low_changes)
+
+    for change in changes:
+        change['acceptable'] = is_change_acceptable(
+            change['reference_DSSP'],
+            change['comparison_DSSP']
+        )
+
+    if len(changes) > 0:
+        # Calculate raw penalty count (all unacceptable changes)
+        raw_unacceptable_count = sum(1 for change in changes if not change['acceptable'])
+
+        # Calculate adjustment: The first B->Low change is "free" (subtract 1 from penalty if it exists)
+        adjustment = 1 if b_to_low_count > 0 else 0
+        final_penalty_count = raw_unacceptable_count - adjustment
+
+        if final_penalty_count < tolerance:
+            print(f"DSSP Passed (Penalty Score: {final_penalty_count})")
+        else:
+            # Export CSV only when there are unacceptable changes exceeding tolerance
+            if output_csv is not None:
+                with open(output_csv, 'w', newline='') as csvfile:
+                    fieldnames = ['residue', 'reference_DSSP', 'comparison_DSSP',
+                                  'reference_description', 'comparison_description',
+                                  'reference_category', 'comparison_category', 'acceptable']
+                    writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+                    writer.writeheader()
+                    writer.writerows(changes)
+
+            print(
+                f"Loss of epitope secondary structure detected. Penalty Score: {final_penalty_count} (Threshold: {tolerance})")
+            raise RuntimeError(f"Loss of epitope secondary structure detected.")
+    else:
+        print("DSSP Passed")
+
+    return changes
+
+
 def mod_header():
     # Checks the length of the CDRs and stores them on a modified header
     lengths = {"H1_len": (main_header[0]).split("|")[2], "H2_len": (main_header[0]).split("|")[3],
                "H3_len": (main_header[0]).split("|")[4], "L1_len": (main_header[1]).split("|")[2],
                "L2_len": (main_header[1]).split("|")[3], "L3_len": (main_header[1]).split("|")[4]}
 
-    headers = {"start_H": str("|".join([str(item) for item in [m for m in (main_header[0]).split("|")[:2]]])), "start_L": str("|".join([str(item) for item in [m for m in (main_header[1]).split("|")[:2]]])), "end_H": str("|".join([str(item) for item in [g for g in (main_header[0]).split("|")[5:]]])), "end_L": str("|".join([str(item) for item in [g for g in (main_header[1]).split("|")[5:]]]))}
+    headers = {"start_H": str("|".join([str(item) for item in [m for m in (main_header[0]).split("|")[:2]]])),
+               "start_L": str("|".join([str(item) for item in [m for m in (main_header[1]).split("|")[:2]]])),
+               "end_H": str("|".join([str(item) for item in [g for g in (main_header[0]).split("|")[5:]]])),
+               "end_L": str("|".join([str(item) for item in [g for g in (main_header[1]).split("|")[5:]]]))}
 
     lengths[str(chain + x) + "_len"] = str(new_CDR_len)
 
-    new_header_h = headers.get("start_H") + "|" + lengths.get("H1_len") + "|" + lengths.get("H2_len") + "|" + lengths.get(
+    new_header_h = headers.get("start_H") + "|" + lengths.get("H1_len") + "|" + lengths.get(
+        "H2_len") + "|" + lengths.get(
         "H3_len") + "|" + headers.get("end_H")
-    new_header_l = headers.get("start_L") + "|" + lengths.get("L1_len") + "|" + lengths.get("L2_len") + "|" + lengths.get(
+    new_header_l = headers.get("start_L") + "|" + lengths.get("L1_len") + "|" + lengths.get(
+        "L2_len") + "|" + lengths.get(
         "L3_len") + "|" + headers.get("end_L")
 
     new_header_light.append(new_header_l)
@@ -143,7 +322,8 @@ def ter_fix():
 def indel_or_not_indel():
     # Uses the probabilities specified on the cfg file to determine whether or not an in sertion or deletion will be introduced on the CDR sequence
     indel_list = ["NO_INDEL", "DELETION", "INSERTION"]
-    indel = random.choices(indel_list, weights=(float(indel_prob.split("|")[0]), float(indel_prob.split("|")[1]), float(indel_prob.split("|")[2])), k=1)
+    indel = random.choices(indel_list, weights=(
+    float(indel_prob.split("|")[0]), float(indel_prob.split("|")[1]), float(indel_prob.split("|")[2])), k=1)
     indel_cond.clear()
 
     for ind in indel:
@@ -198,8 +378,9 @@ def fix_md_models(chain_ids, latest_ab):
                     current_chain_id = chain_ids[0]
                 if line.startswith(("ATOM", "TER", "HETATM")):
                     if "LYN" in line:
-                        new_line = line[:21].replace("LYN", "LYS").replace("HETATM", "ATOM  ") + current_chain_id + line[
-                                                                                                                    22:]
+                        new_line = line[:21].replace("LYN", "LYS").replace("HETATM",
+                                                                           "ATOM  ") + current_chain_id + line[
+                                                                                                          22:]
                         f_out.write(new_line)
                     else:
                         new_line = line[:21] + current_chain_id + line[22:]
@@ -262,7 +443,8 @@ def fix_md_models(chain_ids, latest_ab):
                             f_out.write("END")
 
 
-def new_complex(latest_ab, latest_complex, latest_ab_complex, temporary, renum, scoring_strictness, approval_threshold):
+def new_complex(latest_ab, latest_complex, latest_ab_complex, temporary, renum, scoring_strictness, approval_threshold,
+                dssp_tolerance):
     # Checks the affinity score of the antibody structure against the target protein
     print("Starting evaluation protocol...")
     # Alignment
@@ -284,240 +466,290 @@ def new_complex(latest_ab, latest_complex, latest_ab_complex, temporary, renum, 
     out = subprocess.run(run_pml_cmd, shell=True, capture_output=True)
     pml_out = out.stdout.decode("utf-8")
     not_chains = ["\'", "[", "]", " ", ",", "\n"]
-    chain_ids = [ch for ch in pml_out.split("cmd.get_chains:")[-1] if ch not in not_chains]
+    chain_ids = [ch for ch in pml_out.split("cmd.get_chains:")[-1].split("\r")[0].split("\n")[0] if ch not in not_chains]
 
     # Refinement with OpenMM
     print("Refining complex side chains...")
     with ClearCache():
-        refine(latest_ab_complex,latest_ab_complex)
+        refine(latest_ab_complex, latest_ab_complex)
 
+    DSSP_ref_ok = True
+
+    # DSSP check after refinement
+    reference_csv = latest_complex.split("_")[3] + "_" + latest_complex.split("_")[4] + "_epitope-DSSP.csv"
     try:
-        # Removal of insertion codes from pdb complex
-        cmd_renum = "pdb_fixinsert " + latest_ab_complex + " > " + temporary + renum + "_" + latest_ab_complex
-        subprocess.run(cmd_renum, shell=True, capture_output=True)
-        # Protonation adjustment with propka
-        cmd_prot = "pdb2pqr30 --with-ph " + ph + " --ff AMBER --ffout AMBER --pdb-output out_pdb2pqr.pdb --titration-state-method propka " + temporary + renum + "_" + latest_ab_complex + " out_pdb2pqr.pqr"
-        # pdb4amber
-        cmd_pdb4amber = "pdb4amber -i out_pdb2pqr.pdb -o out_pdb4amber-addH-preterfix.pdb"
-        # Sampling with Amber MD
-        cmd_md = "sh min_imp.sh"
-
-        print("Running minimization...")
-        subprocess.run(cmd_prot, shell=True, capture_output=True)
-        subprocess.run(cmd_pdb4amber, shell=True, capture_output=True)
-        # Fixing incorrect chain terminations
-        ter_fix()
-        subprocess.run(cmd_md, shell=True, capture_output=True)
-
-        fix_md_models(chain_ids, latest_ab)
-        scoring(latest_ab, latest_ab_complex, scoring_strictness, approval_threshold)
-
+        compare_epitope_DSSP(reference_csv, latest_ab_complex,
+                             "DSSP_bnk_refinement_" + latest_ab_complex.replace(".pdb", ".csv"), dssp_tolerance)
     except:
-        print("Minimization failure. Check " + tested_canon[-1] + "_error.tar for more information.")
+        print("Discarding modification. Check DSSP_bnk_refinement_" + latest_ab_complex.replace(".pdb",
+                                                                                                ".csv") + " for more information.")
+        DSSP_ref_ok = False
+
+    if DSSP_ref_ok:
+        try:
+            # Removal of insertion codes from pdb complex
+            cmd_renum = "pdb_fixinsert " + latest_ab_complex + " > " + temporary + renum + "_" + latest_ab_complex
+            subprocess.run(cmd_renum, shell=True, capture_output=True)
+            # Protonation adjustment with propka
+            cmd_prot = "pdb2pqr30 --with-ph " + ph + " --ff AMBER --ffout AMBER --pdb-output out_pdb2pqr.pdb --titration-state-method propka " + temporary + renum + "_" + latest_ab_complex + " out_pdb2pqr.pqr"
+            # pdb4amber
+            cmd_pdb4amber = "pdb4amber -i out_pdb2pqr.pdb -o out_pdb4amber-addH-preterfix.pdb"
+            # Sampling with Amber MD
+            cmd_md = "sh min_imp.sh"
+
+            print("Running minimization...")
+            subprocess.run(cmd_prot, shell=True, capture_output=True)
+            subprocess.run(cmd_pdb4amber, shell=True, capture_output=True)
+            # Fixing incorrect chain terminations
+            ter_fix()
+            subprocess.run(cmd_md, shell=True, capture_output=True)
+
+            fix_md_models(chain_ids, latest_ab)
+
+        except:
+            print("Minimization failure. Check " + tested_canon[-1] + "_error.tar for more information.")
+            rejected.append(tested_canon[-1])
+            curr_log_rej = "rej_mod_" + curr_struct + ".log"
+            updt_log_rej = open(curr_log_rej, "a", newline="")
+            with redirect_stdout(updt_log_rej):
+                print("\trejbnk_" + tested_canon[-1] + "|Minimization error|FAIL")
+
+            for rep in glob.glob("out-min.pdb"):
+                rep_chain = "CHN_" + rep
+                rep_score = "SCO_" + rep
+                cmd_del_int = "rm " + rep_chain + " " + rep + " " + rep_score + " out* *.out *.info *.rst7 *.crd *.leap *.pqr *.parm7 *.mdinfo *.mdout *.nc temp*"
+                cmd_bkp_error = "tar -cvf " + tested_canon[
+                    -1] + "_error.tar " + rep_chain + " " + rep + " " + rep_score + " out* *.out *.info *.rst7 *.crd *.leap *.pqr *.parm7 *.mdinfo *.mdout *.nc temp*"
+                subprocess.run(cmd_bkp_error, shell=True, capture_output=True)
+                subprocess.run(cmd_del_int, shell=True, capture_output=True)
+
+            del tested_canon[-1]
+
+        # DSSP check after minimization
+        DSSP_min_ok = True
+        try:
+            compare_epitope_DSSP(reference_csv, "SCO_out-min.pdb",
+                                 "DSSP_bnk_minimization_" + latest_ab_complex.replace(".pdb", ".csv"), dssp_tolerance)
+        except:
+            print("Discarding modification. Check DSSP_bnk_minimization_" + latest_ab_complex.replace(".pdb",
+                                                                                                      ".csv") + " for more information.")
+            DSSP_min_ok = False
+
+        if DSSP_min_ok:
+            scoring(latest_ab, latest_ab_complex, scoring_strictness, approval_threshold)
+        else:
+            rejected.append(tested_canon[-1])
+            curr_log_rej = "rej_mod_" + curr_struct + ".log"
+            updt_log_rej = open(curr_log_rej, "a", newline="")
+            with redirect_stdout(updt_log_rej):
+                print("\trejbnk_" + tested_canon[-1] + "|Post-minimization error|FAIL")
+
+            for rep in glob.glob("out-min.pdb"):
+                rep_chain = "CHN_" + rep
+                rep_score = "SCO_" + rep
+                cmd_del_int = "rm " + rep_chain + " " + rep + " " + rep_score + " out* *.out *.info *.rst7 *.crd *.leap *.pqr *.parm7 *.mdinfo *.mdout *.nc temp*"
+                subprocess.run(cmd_del_int, shell=True, capture_output=True)
+
+            del tested_canon[-1]
+
+    else:
+        print("Modification discarded during structure refinement.")
         rejected.append(tested_canon[-1])
         curr_log_rej = "rej_mod_" + curr_struct + ".log"
         updt_log_rej = open(curr_log_rej, "a", newline="")
         with redirect_stdout(updt_log_rej):
-            print("\trejbnk_" + tested_canon[-1] + "|Minimization error|FAIL")
-
-        for rep in glob.glob("out-min.pdb"):
-            rep_chain = "CHN_" + rep
-            rep_score = "SCO_" + rep
-            cmd_del_int = "rm " + rep_chain + " " + rep + " " + rep_score + " out* *.out *.info *.rst7 *.crd *.leap *.pqr *.parm7 *.mdinfo *.mdout *.nc temp*"
-            cmd_bkp_error = "tar -cvf " + tested_canon[
-                -1] + "_error.tar " + rep_chain + " " + rep + " " + rep_score + " out* *.out *.info *.rst7 *.crd *.leap *.pqr *.parm7 *.mdinfo *.mdout *.nc temp*"
-            subprocess.run(cmd_bkp_error, shell=True, capture_output=True)
-            subprocess.run(cmd_del_int, shell=True, capture_output=True)
+            print("\trejbnk_" + tested_canon[-1] + "|Complex assembly error|FAIL")
 
         del tested_canon[-1]
 
 
 def scoring(latest_ab, latest_ab_complex, scoring_strictness, approval_threshold):
-        # Running CSM-AB or Rosetta (REF15 score) to calculate the interaction score of the new complex
-        print("Scoring...")
-        new_score = []
-        latest_score = 0
-        csm_ab_status = False
-        starttime = time.time()
+    # Running CSM-AB or Rosetta (REF15 score) to calculate the interaction score of the new complex
+    print("Scoring...")
+    new_score = []
+    latest_score = 0
+    csm_ab_status = False
+    starttime = time.time()
 
-        if scoring_method == "csm":
-            for rep in glob.glob("out-min.pdb"):
-                rep_score = "SCO_" + rep
-                while csm_ab_status == False:
-                    csm = "curl https://biosig.lab.uq.edu.au/csm_ab/api/prediction_single -X POST -i -F pdb_file=@" + rep_score
-                    out_csm = subprocess.run(csm, shell=True, capture_output=True)
-                    out_csm_cln = out_csm.stdout.decode("utf-8")
+    if scoring_method == "csm":
+        for rep in glob.glob("out-min.pdb"):
+            rep_score = "SCO_" + rep
+            while csm_ab_status == False:
+                csm = "curl https://biosig.lab.uq.edu.au/csm_ab/api/prediction_single -X POST -i -F pdb_file=@" + rep_score
+                out_csm = subprocess.run(csm, shell=True, capture_output=True)
+                out_csm_cln = out_csm.stdout.decode("utf-8")
 
-                    if not "Please provide the Ab-Ag complex" in out_csm_cln and not out_csm_cln == "":
-                        job_id = str(out_csm_cln.split("{\"job_id\": ")[-1].replace("}", "").replace("\"", "")).replace(
-                            "\n",
-                            "")
-                        print("Starting CSM-AB. Job id is " + job_id)
+                if not "Please provide the Ab-Ag complex" in out_csm_cln and not out_csm_cln == "":
+                    job_id = str(out_csm_cln.split("{\"job_id\": ")[-1].replace("}", "").replace("\"", "")).replace(
+                        "\n",
+                        "")
+                    print("Starting CSM-AB. Job id is " + job_id)
 
-                        csm_ab_done = False
-                        starttime2 = time.time()
+                    csm_ab_done = False
+                    starttime2 = time.time()
 
+                    with redirect_stdout(open("CSM-AB.log", "a", newline="")):
+                        print(out_csm_cln)
+                        print("job id:" + job_id)
+
+                    while csm_ab_done == False:
+                        get_csm = "curl https://biosig.lab.uq.edu.au/csm_ab/api/prediction_single -X GET -F job_id=" + job_id
+                        out_get_csm = subprocess.run(get_csm, shell=True, capture_output=True)
+                        out_get_csm_cln = out_get_csm.stdout.decode("utf-8")
                         with redirect_stdout(open("CSM-AB.log", "a", newline="")):
-                            print(out_csm_cln)
+                            print(out_get_csm_cln)
                             print("job id:" + job_id)
-
-                        while csm_ab_done == False:
-                            get_csm = "curl https://biosig.lab.uq.edu.au/csm_ab/api/prediction_single -X GET -F job_id=" + job_id
-                            out_get_csm = subprocess.run(get_csm, shell=True, capture_output=True)
-                            out_get_csm_cln = out_get_csm.stdout.decode("utf-8")
-                            with redirect_stdout(open("CSM-AB.log", "a", newline="")):
-                                print(out_get_csm_cln)
-                                print("job id:" + job_id)
-                            if "\"status\": \"PROCESSING\"" in out_get_csm_cln:
-                                print("Running CSM-AB...")
-                                time.sleep(10.0 - ((time.time() - starttime2) % 10.0))
-                            if not "\"status\": \"PROCESSING\"" in out_get_csm_cln and not out_csm_cln == "":
-                                if "\"typeofAb\":" in out_get_csm_cln:
-                                    new_score.append(float(out_get_csm_cln.split("\"prediction\": ")[-1].replace("}", "")))
-                                    csm_ab_done = True
-                                    csm_ab_status = True
-                                else:
-                                    print("Error while getting results. Trying again in 10s")
-                                    time.sleep(10.0 - ((time.time() - starttime2) % 10.0))
-                            if out_csm_cln == "":
+                        if "\"status\": \"PROCESSING\"" in out_get_csm_cln:
+                            print("Running CSM-AB...")
+                            time.sleep(10.0 - ((time.time() - starttime2) % 10.0))
+                        if not "\"status\": \"PROCESSING\"" in out_get_csm_cln and not out_csm_cln == "":
+                            if "\"typeofAb\":" in out_get_csm_cln:
+                                new_score.append(float(out_get_csm_cln.split("\"prediction\": ")[-1].replace("}", "")))
+                                csm_ab_done = True
+                                csm_ab_status = True
+                            else:
                                 print("Error while getting results. Trying again in 10s")
                                 time.sleep(10.0 - ((time.time() - starttime2) % 10.0))
-
-                    else:
                         if out_csm_cln == "":
-                            print("Error while sending job. Trying again in 10s")
-                            time.sleep(10.0 - ((time.time() - starttime) % 10.0))
+                            print("Error while getting results. Trying again in 10s")
+                            time.sleep(10.0 - ((time.time() - starttime2) % 10.0))
+
+                else:
+                    if out_csm_cln == "":
+                        print("Error while sending job. Trying again in 10s")
+                        time.sleep(10.0 - ((time.time() - starttime) % 10.0))
+                    else:
+                        if "Given PDB has no Antibody Sequence" in out_csm_cln:
+                            print(
+                                "CSM-AB prediction error. Check the most recent AB/AG complex structure and if it is the file that was sent to CSM-AB. File: " + latest_ab_complex)
                         else:
-                            if "Given PDB has no Antibody Sequence" in out_csm_cln:
-                                print(
-                                    "CSM-AB prediction error. Check the most recent AB/AG complex structure and if it is the file that was sent to CSM-AB. File: " + latest_ab_complex)
-                            else:
-                                print(
-                                    "Unknown CSM-AB error. Skipping current modification. Check CSM-AB.log for more information")
-                            with redirect_stdout(open("CSM-AB.log", "a", newline="")):
-                                print(out_csm_cln)
-                            break
+                            print(
+                                "Unknown CSM-AB error. Skipping current modification. Check CSM-AB.log for more information")
+                        with redirect_stdout(open("CSM-AB.log", "a", newline="")):
+                            print(out_csm_cln)
+                        break
 
+    if scoring_method == "ref15":
+        for rep in glob.glob("out-min.pdb"):
+            rep_score = "SCO_" + rep
+            with redirect_stdout(open("pymol_score.pml", "w", newline="")):
+                print("load " + rep_score)
+                print("select ab, chain H + chain L")
+                print("save antibody_score.pdb, ab")
+                print("remove ab")
+                print("save antigen_score.pdb, all")
+
+            run_pml_cmd = str(pymol_command + " -qc pymol_score.pml")
+            subprocess.run(run_pml_cmd, shell=True, capture_output=True)
+
+            scored_complex = pyrosetta.pose_from_pdb(rep_score)
+            ab_only = pyrosetta.pose_from_pdb("antibody_score.pdb")
+            ag_only = pyrosetta.pose_from_pdb("antigen_score.pdb")
+
+            scorefxn = get_fa_scorefxn()
+            complex_en = float(scorefxn(scored_complex))
+            ab_en = float(scorefxn(ab_only))
+            ag_en = float(scorefxn(ag_only))
+            new_score.append(float(complex_en - ab_en - ag_en))
+            subprocess.run("rm antibody_score.pdb antigen_score.pdb", shell=True, capture_output=True)
+
+    # Score comparison
+    if new_score:
+        av_new_score = new_score[-1]
+        curr_log = "swap_" + curr_struct + ".log"
+        open_curr_log = open(curr_log, "r").readlines()
+
+        for z in open_curr_log:
+            if z.startswith(file):
+                latest_score = (z.split("|")[1]).replace("\n", "")
+
+        kT = 0
         if scoring_method == "ref15":
-            for rep in glob.glob("out-min.pdb"):
-                rep_score = "SCO_" + rep
-                with redirect_stdout(open("pymol_score.pml", "w", newline="")):
-                    print("load " + rep_score)
-                    print("select ab, chain H + chain L")
-                    print("save antibody_score.pdb, ab")
-                    print("remove ab")
-                    print("save antigen_score.pdb, all")
+            kT = 1.0
+        if scoring_method == "csm":
+            kT = 0.593
 
-                run_pml_cmd = str(pymol_command + " -qc pymol_score.pml")
-                subprocess.run(run_pml_cmd, shell=True, capture_output=True)
+        approval_condition = False
 
-                scored_complex = pyrosetta.pose_from_pdb(rep_score)
-                ab_only = pyrosetta.pose_from_pdb("antibody_score.pdb")
-                ag_only = pyrosetta.pose_from_pdb("antigen_score.pdb")
+        if scoring_strictness == "metro":
+            approval_prob = math.exp((float(latest_score) - av_new_score) / kT)
+            metropolis = random.random()
+            if (float(av_new_score) < float(latest_score)) or (
+                    metropolis < approval_prob and float(av_new_score) != float(latest_score)):
+                approval_condition = True
+            elif (float(av_new_score) > float(latest_score) and metropolis > approval_prob) or float(
+                    av_new_score) == float(
+                latest_score):
+                approval_condition = False
 
-                scorefxn = get_fa_scorefxn()
-                complex_en = float(scorefxn(scored_complex))
-                ab_en = float(scorefxn(ab_only))
-                ag_en = float(scorefxn(ag_only))
-                new_score.append(float(complex_en - ab_en - ag_en))
-                subprocess.run("rm antibody_score.pdb antigen_score.pdb", shell=True, capture_output=True)
+        if scoring_strictness == "normal":
+            if float(av_new_score) < float(latest_score):
+                approval_condition = True
+            elif float(av_new_score) > float(latest_score) or float(av_new_score) == float(latest_score):
+                approval_condition = False
 
-        # Score comparison
-        if new_score:
-            av_new_score = new_score[-1]
-            curr_log = "swap_" + curr_struct + ".log"
-            open_curr_log = open(curr_log, "r").readlines()
+        if scoring_strictness == "strict":
+            if float(av_new_score) - float(latest_score) <= approval_threshold:
+                approval_condition = True
+            elif float(av_new_score) - float(latest_score) > approval_threshold:
+                approval_condition = False
 
-            for z in open_curr_log:
-                if z.startswith(file):
-                    latest_score = (z.split("|")[1]).replace("\n", "")
+        if approval_condition:
+            file_number = (file.split("_")[4]).replace(".anarci", "")
+            new_file_number = '{:06}'.format(int(file_number) + 1)
+            file_start = "_".join([str(item) for item in [p for p in file.split("_")[:4]]])
+            new_file_name = file_start + "_" + str(new_file_number) + ".anarci"
 
-            kT = 0
-            if scoring_method == "ref15":
-                kT = 1.0
-            if scoring_method == "csm":
-                kT = 0.593
+            updt_log = open(curr_log, "a", newline="")
 
-            approval_condition = False
+            if indel_cond:
+                with redirect_stdout(updt_log):
+                    print("\tbnkswp_" + tested_canon[-1] + "|" + str(av_new_score) + "|PASS|" + indel_cond[-1])
+                    print(new_file_name + "|" + str(av_new_score))
+            if not indel_cond:
+                with redirect_stdout(updt_log):
+                    print("\tbnkswp_" + tested_canon[-1] + "|" + str(av_new_score) + "|PASS")
+                    print(new_file_name + "|" + str(av_new_score))
 
-            if scoring_strictness == "metro":
-                approval_prob = math.exp((float(latest_score) - av_new_score) / kT)
-                metropolis = random.random()
-                if (float(av_new_score) < float(latest_score)) or (
-                        metropolis < approval_prob and float(av_new_score) != float(latest_score)):
-                    approval_condition = True
-                elif (float(av_new_score) > float(latest_score) and metropolis > approval_prob) or float(
-                        av_new_score) == float(
-                        latest_score):
-                    approval_condition = False
+            cmd = str("ANARCI -i " + file.replace(".anarci", "") + "_" + tested_canon[
+                -1] + ".fasta -s martin -o " + new_file_name + " --assign_germline -p 8 --use_species human")
+            out = subprocess.run(cmd, shell=True, capture_output=True)
+            log9 = (out.stderr).decode("utf-8")
+            final.append(new_file_name)
+            final_sco.append(av_new_score)
 
-            if scoring_strictness == "normal":
-                if float(av_new_score) < float(latest_score):
-                    approval_condition = True
-                elif float(av_new_score) > float(latest_score) or float(av_new_score) == float(latest_score):
-                    approval_condition = False
+            log3 = open("anarci_out.log", "a", newline="")
+            with redirect_stdout(log3):
+                print(new_file_name)
+                print(log9)
 
-            if scoring_strictness == "strict":
-                if float(av_new_score) - float(latest_score) <= approval_threshold:
-                    approval_condition = True
-                elif float(av_new_score) - float(latest_score) > approval_threshold:
-                    approval_condition = False
+            print(tested_canon[-1] + "|" + str(av_new_score) + "|Modification approved")
+            condition.append("PASS")
 
-            if approval_condition:
-                file_number = (file.split("_")[4]).replace(".anarci", "")
-                new_file_number = '{:06}'.format(int(file_number) + 1)
-                file_start = "_".join([str(item) for item in [p for p in file.split("_")[:4]]])
-                new_file_name = file_start + "_" + str(new_file_number) + ".anarci"
+            rename_cmd = str("cp " + latest_ab_complex + " complex_" + new_file_name.replace(".anarci", ".pdb"))
+            rename_cmd2 = str(
+                "cp " + latest_ab.replace(".pdb", ".fasta") + " " + new_file_name.replace(".anarci", ".fasta"))
+            rename_cmd3 = str("cp " + latest_ab + " " + new_file_name.replace(".anarci", ".pdb"))
+            subprocess.run(rename_cmd, shell=True, capture_output=True)
+            subprocess.run(rename_cmd2, shell=True, capture_output=True)
+            subprocess.run(rename_cmd3, shell=True, capture_output=True)
 
-                updt_log = open(curr_log, "a", newline="")
+        if not approval_condition:
+            print(tested_canon[-1] + "|" + str(av_new_score) + "|Modification rejected")
+            updt_log = open(curr_log, "a", newline="")
+            if indel_cond:
+                with redirect_stdout(updt_log):
+                    print("\tbnkswp_" + tested_canon[-1] + "|" + str(av_new_score) + "|FAIL|" + indel_cond[-1])
+            if not indel_cond:
+                with redirect_stdout(updt_log):
+                    print("\tbnkswp_" + tested_canon[-1] + "|" + str(av_new_score) + "|FAIL")
 
-                if indel_cond:
-                    with redirect_stdout(updt_log):
-                        print("\tbnkswp_" + tested_canon[-1] + "|" + str(av_new_score) + "|PASS|" + indel_cond[-1])
-                        print(new_file_name + "|" + str(av_new_score))
-                if not indel_cond:
-                    with redirect_stdout(updt_log):
-                        print("\tbnkswp_" + tested_canon[-1] + "|" + str(av_new_score) + "|PASS")
-                        print(new_file_name + "|" + str(av_new_score))
-
-                cmd = str("ANARCI -i " + file.replace(".anarci", "") + "_" + tested_canon[-1] + ".fasta -s martin -o " + new_file_name + " --assign_germline -p 8 --use_species human")
-                out = subprocess.run(cmd, shell=True, capture_output=True)
-                log9 = (out.stderr).decode("utf-8")
-                final.append(new_file_name)
-                final_sco.append(av_new_score)
-
-                log3 = open("anarci_out.log", "a", newline="")
-                with redirect_stdout(log3):
-                    print(new_file_name)
-                    print(log9)
-
-                print(tested_canon[-1] + "|" + str(av_new_score) + "|Modification approved")
-                condition.append("PASS")
-
-                rename_cmd = str("cp " + latest_ab_complex + " complex_" + new_file_name.replace(".anarci", ".pdb"))
-                rename_cmd2 = str(
-                    "cp " + latest_ab.replace(".pdb", ".fasta") + " " + new_file_name.replace(".anarci", ".fasta"))
-                rename_cmd3 = str("cp " + latest_ab + " " + new_file_name.replace(".anarci", ".pdb"))
-                subprocess.run(rename_cmd, shell=True, capture_output=True)
-                subprocess.run(rename_cmd2, shell=True, capture_output=True)
-                subprocess.run(rename_cmd3, shell=True, capture_output=True)
-
-            if not approval_condition:
-                print(tested_canon[-1] + "|" + str(av_new_score) + "|Modification rejected")
-                updt_log = open(curr_log, "a", newline="")
-                if indel_cond:
-                    with redirect_stdout(updt_log):
-                        print("\tbnkswp_" + tested_canon[-1] + "|" + str(av_new_score) + "|FAIL|" + indel_cond[-1])
-                if not indel_cond:
-                    with redirect_stdout(updt_log):
-                        print("\tbnkswp_" + tested_canon[-1] + "|" + str(av_new_score) + "|FAIL")
-
-            # Removes scoring files from the current cycle
-            for rep in glob.glob("out-min.pdb"):
-                rep_chain = "CHN_" + rep
-                rep_score = "SCO_" + rep
-                cmd_del_int = "rm " + rep_chain + " " + rep + " " + rep_score + " out* *.out *.info *.rst7 *.crd *.leap *.pqr *.parm7 *.mdinfo *.mdout *.nc out* temp*"
-                subprocess.run(cmd_del_int, shell=True, capture_output=True)
+        # Removes scoring files from the current cycle
+        for rep in glob.glob("out-min.pdb"):
+            rep_chain = "CHN_" + rep
+            rep_score = "SCO_" + rep
+            cmd_del_int = "rm " + rep_chain + " " + rep + " " + rep_score + " out* *.out *.info *.rst7 *.crd *.leap *.pqr *.parm7 *.mdinfo *.mdout *.nc out* temp*"
+            subprocess.run(cmd_del_int, shell=True, capture_output=True)
 
 
 ##########
@@ -538,6 +770,7 @@ approval_threshold = 0
 ph = "7"
 pymol_command = ""
 scoring_method = "cfg:scoring_method"
+dssp_tolerance = 3
 
 cfg = open("swap_settings.cfg").readlines()
 for setting in cfg:
@@ -562,17 +795,20 @@ for setting in cfg:
     if "scoring_method" in setting:
         scoring_method = str(setting.split("=")[1].replace("\n", ""))
     if "steps" in setting:
-         steps = str(setting.split("=")[1].replace("\n", "").replace("\r",""))
+        steps = str(setting.split("=")[1].replace("\n", "").replace("\r", ""))
     if "scoring_strictness" in setting:
-        scoring_strictness = str(setting.split("=")[1].replace("\n", "").replace("\r",""))
+        scoring_strictness = str(setting.split("=")[1].replace("\n", "").replace("\r", ""))
     if "approval_threshold" in setting:
         if scoring_strictness == "strict":
-            approval_threshold = float(setting.split("=")[1].replace("\n", "").replace("\r",""))
+            approval_threshold = float(setting.split("=")[1].replace("\n", "").replace("\r", ""))
+    if "DSSP_changes_tolerance" in setting:
+        dssp_tolerance = int(setting.split("=")[1].replace("\n", "").replace("\r", ""))
 
 print("Starting new step: OAS non-H3 CDR grafting")
 
 if scoring_method == "ref15":
     from pyrosetta import *
+
     init("-mute all")
 
 base_structure = []
@@ -593,7 +829,7 @@ for struc in glob.glob("bs" + base_structure[0] + "_*"):
 
 for st in structures:
     # Stores the germlines of the antibody being modified
-    germline = {"H":"germ_H","L":"germ_L"}
+    germline = {"H": "germ_H", "L": "germ_L"}
     # Counts the number of insertions and deletions attempted
     ins_count = 0
     del_count = 0
@@ -681,8 +917,9 @@ for st in structures:
                             cdr3_canon = seq.split("|")[4]
                             germ = seq.split("|")[5]
                             germline[chain] = germ
-                            for i in range(1,4):
-                                (locals()[chain + "_cdr" + str(i) + "_canon"]).append(locals()["cdr" + str(i) + "_canon"])
+                            for i in range(1, 4):
+                                (locals()[chain + "_cdr" + str(i) + "_canon"]).append(
+                                    locals()["cdr" + str(i) + "_canon"])
 
                 # List of chains and CDR numbers. H_list does not include CDR H3.
                 Ch_list = ["H", "L"]
@@ -700,7 +937,8 @@ for st in structures:
 
                 indel_cond = []
                 # Chain being modified is chosen according to the specified probabilities from the cfg file
-                swap_Ch = random.choices(Ch_list, weights=(int(chain_prob.split("|")[0]), int(chain_prob.split("|")[1])), k=1)
+                swap_Ch = random.choices(Ch_list,
+                                         weights=(int(chain_prob.split("|")[0]), int(chain_prob.split("|")[1])), k=1)
                 # The pieces that will form the modified antibody sequence are stored here, along with the length of the CDR that is being grafted
                 start = []
                 new_CDR = "sequence"
@@ -718,9 +956,10 @@ for st in structures:
 
                 for chain in swap_Ch:
                     # CDR being modified is chosen according to the specified probabilities from the cfg file
-                    swapH = random.choices(H_list, weights=(int(cdr_prob.split("|")[0]), int(cdr_prob.split("|")[1])), k=1)
+                    swapH = random.choices(H_list, weights=(int(cdr_prob.split("|")[0]), int(cdr_prob.split("|")[1])),
+                                           k=1)
                     swapL = random.choices(L_list, weights=(
-                    int(cdr_prob.split("|")[2]), int(cdr_prob.split("|")[3]), int(cdr_prob.split("|")[4])), k=1)
+                        int(cdr_prob.split("|")[2]), int(cdr_prob.split("|")[3]), int(cdr_prob.split("|")[4])), k=1)
 
                     DE_co_graft = 0
                     if chain == "H":
@@ -737,7 +976,7 @@ for st in structures:
                         indel_or_not_indel()
 
                         canon_file = os.path.dirname(os.path.abspath(__file__)) + "/cdr_bnk/" + swap_Ch[
-                                    -1] + x + "-" + str(rep_canon[-1]) + "_cdr.fasta"
+                            -1] + x + "-" + str(rep_canon[-1]) + "_cdr.fasta"
 
                         try:
                             # Checks how many sequences of the specified germline can be tested from the sequence set.
@@ -756,10 +995,14 @@ for st in structures:
                                 for ln in open_canon:
                                     line_num += 1
                                     if ln.startswith(">"):
-                                        if ln.split("|")[9].split("_")[0].split("-")[0] == germline.get(chain).split("-")[0] and not ln.split("|")[9].split("_")[0] == germline.get(chain):
-                                            family_germ_seq_lst.append(str(line_num) + "_" + ln.split("|")[9].split("_")[0])
+                                        if ln.split("|")[9].split("_")[0].split("-")[0] == \
+                                                germline.get(chain).split("-")[0] and not ln.split("|")[9].split("_")[
+                                                                                              0] == germline.get(chain):
+                                            family_germ_seq_lst.append(
+                                                str(line_num) + "_" + ln.split("|")[9].split("_")[0])
                                         if ln.split("|")[9].split("_")[0] == germline.get(chain):
-                                            single_germ_seq_lst.append(str(line_num) + "_" + ln.split("|")[9].split("_")[0])
+                                            single_germ_seq_lst.append(
+                                                str(line_num) + "_" + ln.split("|")[9].split("_")[0])
 
                             if "INSERTION" in indel_cond:
                                 ins_count += 1
@@ -788,7 +1031,10 @@ for st in structures:
                                         if number_tested >= int(
                                                 sum(germline.get(chain) in s for s in open_canon) - 1):
                                             print(
-                                                "All database " + chain + x + "-" + str(rep_canon[-1]) + " CDR sequences of germline " + germline.get(chain) + " have been tested. Allowing other " + germline.get(chain).split("-")[0] + " germlines...")
+                                                "All database " + chain + x + "-" + str(
+                                                    rep_canon[-1]) + " CDR sequences of germline " + germline.get(
+                                                    chain) + " have been tested. Allowing other " +
+                                                germline.get(chain).split("-")[0] + " germlines...")
                                             line_range = int(len(family_germ_seq_lst))
                                             chosen_line = random.randrange(1, line_range, 1)
                                             file_line = int(family_germ_seq_lst[chosen_line - 1].split("_")[0])
@@ -823,8 +1069,11 @@ for st in structures:
                                     else:
                                         find_header_germline = find_header.split("|")[9]
                                         if not find_header_germline == germline.get(chain):
-                                            print("All database " + chain + x + "-" + str(rep_canon[-1]) + " CDR sequences from " + germline.get(chain).split("-")[0] + " germlines have been tested. Trying another CDR...")
-                                            #database_exhaustion_check.append(str(chain + x))
+                                            print("All database " + chain + x + "-" + str(
+                                                rep_canon[-1]) + " CDR sequences from " +
+                                                  germline.get(chain).split("-")[
+                                                      0] + " germlines have been tested. Trying another CDR...")
+                                            # database_exhaustion_check.append(str(chain + x))
                                             break
                                         else:
                                             pass
@@ -867,12 +1116,15 @@ for st in structures:
 
                             else:
                                 print(
-                                    "All database length " + str(rep_canon[-1]) + " " + chain + x + " CDR sequences have been tested. Trying another CDR...")
-                                if not (str(chain + x) in database_exhaustion_check) and (str(rep_canon[-1]) == locals()[chain + "_cdr" + x + "_canon"][-1]):
+                                    "All database length " + str(rep_canon[
+                                                                     -1]) + " " + chain + x + " CDR sequences have been tested. Trying another CDR...")
+                                if not (str(chain + x) in database_exhaustion_check) and (
+                                        str(rep_canon[-1]) == locals()[chain + "_cdr" + x + "_canon"][-1]):
                                     database_exhaustion_check.append(str(chain + x))
 
                         except:
-                            print("No sequences found in database for CDR " + chain + x + " of length " + str(rep_canon[-1]) + ". Trying another CDR...")
+                            print("No sequences found in database for CDR " + chain + x + " of length " + str(
+                                rep_canon[-1]) + ". Trying another CDR...")
                             pass
 
                         if main_header:
@@ -884,13 +1136,14 @@ for st in structures:
 
                             if int(x) == DE_co_graft:
                                 newseq = "".join(
-                                    item for item in [w for w in start if not w == "-"]) + new_CDR + "".join(item for item in [w for w in mid if not w == "-"]) + new_DE + "".join(
+                                    item for item in [w for w in start if not w == "-"]) + new_CDR + "".join(
+                                    item for item in [w for w in mid if not w == "-"]) + new_DE + "".join(
                                     item for item in [w for w in end if not w == "-"])
 
                             if not int(x) == DE_co_graft:
                                 newseq = "".join(
-                                item for item in [w for w in start if not w == "-"]) + new_CDR + "".join(
-                                item for item in [w for w in end if not w == "-"])
+                                    item for item in [w for w in start if not w == "-"]) + new_CDR + "".join(
+                                    item for item in [w for w in end if not w == "-"])
 
                             mod_header()
 
@@ -912,7 +1165,8 @@ for st in structures:
 
                             if not error:
                                 # If the modelling step gets completed sucessfully, the new antibody structure will be scored according to its affinity with the target protein
-                                new_complex(latest_ab, latest_complex, latest_ab_complex, temporary, renum, scoring_strictness, approval_threshold)
+                                new_complex(latest_ab, latest_complex, latest_ab_complex, temporary, renum,
+                                            scoring_strictness, approval_threshold, dssp_tolerance)
                                 indel_cond.clear()
 
                 if "PASS" in condition:

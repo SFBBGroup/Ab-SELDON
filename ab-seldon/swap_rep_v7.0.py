@@ -1,4 +1,3 @@
-
 import glob
 import os
 import subprocess
@@ -7,10 +6,14 @@ import math
 import time
 import re
 import torch
+import ast
+import numpy as np
+import csv
 from contextlib import redirect_stdout
 from itertools import count
 from ImmuneBuilder import ABodyBuilder2
 from ImmuneBuilder.refine import refine
+
 predictor = ABodyBuilder2(numbering_scheme="martin")
 
 
@@ -22,19 +25,197 @@ class ClearCache:
         torch.cuda.empty_cache()
 
 
+def calculate_DSSP(pdb_file):
+    """Run DSSP analysis and return list of dictionaries with residue secondary structures"""
+    filename = os.path.splitext(os.path.basename(pdb_file))[0]
+    dssp_file = f'{filename}.dssp'
+
+    try:
+        subprocess.run(
+            f"mkdssp {pdb_file} --output-format dssp > {dssp_file}",
+            shell=True,
+            check=True,
+            stderr=subprocess.DEVNULL
+        )
+    except subprocess.CalledProcessError as e:
+        raise RuntimeError(f"Error running DSSP on {pdb_file}") from e
+
+    dssp_data = []
+    with open(dssp_file, 'r') as f:
+        lines = f.readlines()
+        start_idx = None
+        for i, line in enumerate(lines):
+            if 'RESIDUE AA' in line:
+                start_idx = i + 1
+                break
+
+        if start_idx is None:
+            raise RuntimeError("Could not find RESIDUE AA header in DSSP file")
+
+        for line in lines[start_idx:]:
+            if len(line) < 20:
+                continue
+            dssp_data.append({
+                'residue_num': line[5:10].strip(),
+                'chain': line[11].strip(),
+                'secondary_structure': line[16].strip() if line[16].strip() else ' '
+            })
+
+    if os.path.exists(dssp_file):
+        os.remove(dssp_file)
+
+    return dssp_data
+
+
+def get_ss_description(code):
+    """Convert DSSP single-letter code to human-readable description"""
+    ss_map = {
+        'H': 'Alpha helix', 'B': 'Beta bridge', 'E': 'Strand',
+        'G': 'Helix_3', 'I': 'Helix_5', 'P': 'Helix_PPII',
+        'T': 'Turn', 'S': 'Bend', ' ': 'Loop'
+    }
+    return ss_map.get(code, 'Unknown')
+
+
+def get_structure_category(ss_code):
+    """Classify DSSP code into low_order, beta, or helix category"""
+    structure_types = {
+        'low_order': ['T', 'S', ' '],
+        'beta': ['B', 'E'],
+        'helix': ['H', 'G', 'I', 'P']
+    }
+    for category, codes in structure_types.items():
+        if ss_code in codes:
+            return category
+    return 'unknown'
+
+
+def is_change_acceptable(ref_ss, comp_ss):
+    """Determine if secondary structure change meets acceptability criteria"""
+    ref_cat = get_structure_category(ref_ss)
+    comp_cat = get_structure_category(comp_ss)
+
+    if ref_cat == comp_cat:
+        return True
+    if ref_cat == 'low_order' and comp_cat in ['beta', 'helix']:
+        return True
+
+    # Note: B -> low_order is technically a loss of structure, so it returns False here.
+    # The tolerance for the "first" B->low change is handled in compare_epitope_DSSP.
+    return False
+
+
+def compare_epitope_DSSP(reference_csv, comparison_pdb, output_csv=None, tolerance=3):
+    """Compare epitope secondary structures between reference CSV and comparison PDB"""
+    if not os.path.exists(reference_csv):
+        raise FileNotFoundError(f"Reference CSV not found: {reference_csv}")
+
+    # Read reference CSV
+    ref_data = []
+    with open(reference_csv, 'r', newline='') as csvfile:
+        reader = csv.DictReader(csvfile)
+        columns = reader.fieldnames
+
+        if 'chain/resnumber' not in columns or 'DSSP_code' not in columns:
+            raise ValueError("CSV must contain 'chain/resnumber' and 'DSSP_code' columns")
+
+        for row in reader:
+            ref_data.append(row)
+
+    print("Checking epitope secondary structure with DSSP...")
+    dssp_compare = calculate_DSSP(comparison_pdb)
+
+    if len(dssp_compare) == 0:
+        raise RuntimeError("DSSP analysis produced no data for comparison structure")
+
+    changes = []
+    b_to_low_changes = []
+
+    for row in ref_data:
+        residue = row['chain/resnumber']
+        ref_ss = row['DSSP_code']
+        chain, res_num = residue.split('/')
+
+        # Find matching entry in dssp_compare
+        comp_ss = None
+        for entry in dssp_compare:
+            if entry['chain'] == chain and entry['residue_num'] == res_num:
+                comp_ss = entry['secondary_structure']
+                break
+
+        if comp_ss is None:
+            continue
+
+        if ref_ss != comp_ss:
+            changes.append({
+                'residue': residue,
+                'reference_DSSP': ref_ss,
+                'comparison_DSSP': comp_ss,
+                'reference_description': get_ss_description(ref_ss),
+                'comparison_description': get_ss_description(comp_ss),
+                'reference_category': get_structure_category(ref_ss),
+                'comparison_category': get_structure_category(comp_ss)
+            })
+
+            if ref_ss == 'B' and get_structure_category(comp_ss) == 'low_order':
+                b_to_low_changes.append(residue)
+
+    b_to_low_count = len(b_to_low_changes)
+
+    for change in changes:
+        change['acceptable'] = is_change_acceptable(
+            change['reference_DSSP'],
+            change['comparison_DSSP']
+        )
+
+    if len(changes) > 0:
+        # Calculate raw penalty count (all unacceptable changes)
+        raw_unacceptable_count = sum(1 for change in changes if not change['acceptable'])
+
+        # Calculate adjustment: The first B->Low change is "free" (subtract 1 from penalty if it exists)
+        adjustment = 1 if b_to_low_count > 0 else 0
+        final_penalty_count = raw_unacceptable_count - adjustment
+
+        if final_penalty_count < tolerance:
+            print(f"DSSP Passed (Penalty Score: {final_penalty_count})")
+        else:
+            # Export CSV only when there are unacceptable changes exceeding tolerance
+            if output_csv is not None:
+                with open(output_csv, 'w', newline='') as csvfile:
+                    fieldnames = ['residue', 'reference_DSSP', 'comparison_DSSP',
+                                  'reference_description', 'comparison_description',
+                                  'reference_category', 'comparison_category', 'acceptable']
+                    writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+                    writer.writeheader()
+                    writer.writerows(changes)
+
+            print(
+                f"Loss of epitope secondary structure detected. Penalty Score: {final_penalty_count} (Threshold: {tolerance})")
+            raise RuntimeError(f"Loss of epitope secondary structure detected.")
+    else:
+        print("DSSP Passed")
+
+    return changes
+
+
 def mod_header():
     # Checks the length of the CDRs and stores them on a modified header
     lengths = {"H1_len": (main_header[0]).split("|")[2], "H2_len": (main_header[0]).split("|")[3],
                "H3_len": (main_header[0]).split("|")[4], "L1_len": (main_header[1]).split("|")[2],
                "L2_len": (main_header[1]).split("|")[3], "L3_len": (main_header[1]).split("|")[4]}
 
-    headers = {"start_H":str("|".join([str(item) for item in [m for m in (main_header[0]).split("|")[:2]]])), "start_L":str("|".join([str(item) for item in [m for m in (main_header[1]).split("|")[:2]]])), "end_H":str("|".join([str(item) for item in [g for g in (main_header[0]).split("|")[5:]]])), "end_L":str("|".join([str(item) for item in [g for g in (main_header[1]).split("|")[5:]]]))}
+    headers = {"start_H": str("|".join([str(item) for item in [m for m in (main_header[0]).split("|")[:2]]])),
+               "start_L": str("|".join([str(item) for item in [m for m in (main_header[1]).split("|")[:2]]])),
+               "end_H": str("|".join([str(item) for item in [g for g in (main_header[0]).split("|")[5:]]])),
+               "end_L": str("|".join([str(item) for item in [g for g in (main_header[1]).split("|")[5:]]]))}
 
     lengths[str(chain + x) + "_len"] = str(new_CDR_len)
 
-    new_header_h = headers.get("start_H") + "|" + lengths.get("H1_len") + "|" + lengths.get("H2_len") + "|" + lengths.get(
+    new_header_h = headers.get("start_H") + "|" + lengths.get("H1_len") + "|" + lengths.get(
+        "H2_len") + "|" + lengths.get(
         "H3_len") + "|" + headers.get("end_H")
-    new_header_l = headers.get("start_L") + "|" + lengths.get("L1_len") + "|" + lengths.get("L2_len") + "|" + lengths.get(
+    new_header_l = headers.get("start_L") + "|" + lengths.get("L1_len") + "|" + lengths.get(
+        "L2_len") + "|" + lengths.get(
         "L3_len") + "|" + headers.get("end_L")
 
     new_header_light.append(new_header_l)
@@ -122,8 +303,9 @@ def fix_md_models(chain_ids, latest_ab):
                     current_chain_id = chain_ids[0]
                 if line.startswith(("ATOM", "TER", "HETATM")):
                     if "LYN" in line:
-                        new_line = line[:21].replace("LYN", "LYS").replace("HETATM", "ATOM  ") + current_chain_id + line[
-                                                                                                                    22:]
+                        new_line = line[:21].replace("LYN", "LYS").replace("HETATM",
+                                                                           "ATOM  ") + current_chain_id + line[
+                                                                                                          22:]
                         f_out.write(new_line)
                     else:
                         new_line = line[:21] + current_chain_id + line[22:]
@@ -186,67 +368,77 @@ def fix_md_models(chain_ids, latest_ab):
                             f_out.write("END")
 
 
-def contact_count(chain_ids, latest_complex, latest_ab_complex):
-    # Checks is the number of atomic contacts on the modified chain has grown too much. This would suggest that the model of the new complex is innacurate, so the modification must be discarded.
-    initial_count = ""
-    new_count = ""
-    ag_chain_num = 1
+def calculate_translation_vector(paratope_com, epitope_com, distance=0.5):
+    # Calculates the translation vector to move the antibody away from the antigen.
+    ab_com = np.array(paratope_com)
+    ag_com = np.array(epitope_com)
+    direction_vector = ab_com - ag_com
+
+    magnitude = np.linalg.norm(direction_vector)
+    unit_vector = direction_vector / magnitude
+    translation_vector = unit_vector * distance
+
+    return translation_vector
+
+
+def contact_count(chain_ids, chain, latest_ab_complex):
+    # Checks if the structural alignment has produced a complex with unrealistically entangled chains. If so, the modification is discarded.
+    ab_chain = chain
+    no_ext = latest_ab_complex.replace(".pdb", "")
+    with redirect_stdout(open("pymol_com.pml", "w", newline="")):
+        print(f"load {latest_ab_complex}")
+        for ag_chn in chain_ids:
+            if not ag_chn == "L" and not ag_chn == "H":
+                print(f"select epitope, chain {ag_chn} near_to 10.0 of chain {ab_chain}")
+                print(f"select paratope, chain {ab_chain} near_to 10.0 of chain {ag_chn}")
+        print("centerofmass epitope")
+        print("centerofmass paratope")
+
+    run_com_cmd = str(pymol_command + " -qc pymol_com.pml")
+    out = subprocess.run(run_com_cmd, shell=True, capture_output=True)
+    pml_com_out = out.stdout.decode("utf-8").split("\n")
+
+    epitope_com = tuple(ast.literal_eval(pml_com_out[-4].replace("Center of Mass: ", "")))
+    paratope_com = tuple(ast.literal_eval(pml_com_out[-2].replace("Center of Mass: ", "")))
+
+    translation = calculate_translation_vector(paratope_com, epitope_com, 0.5)
+    distance_around = 2.7
 
     with redirect_stdout(open("pymol_count.pml", "w", newline="")):
-        print("load " + latest_complex)
-        print("select ori_" + chain + ", chain " + chain + " and name CA")
-        for ag_chn in chain_ids:
-            if not ag_chn == "L" and not ag_chn == "H":
-                print("select ag_" + str(ag_chain_num) + ", chain " + ag_chn + " and name CA")
-                print("select ag_" + str(ag_chain_num) + " near_to 4.5 of ori_" + chain)
-                ag_chain_num = ag_chain_num + 1
-
-        ag_chain_num = 1
-        print("delete " + latest_complex.replace(".pdb", ""))
         print("load " + latest_ab_complex)
-        print("select new_" + chain + ", chain " + chain + " and name CA")
-        for ag_chn in chain_ids:
-            if not ag_chn == "L" and not ag_chn == "H":
-                print("select ag_" + str(ag_chain_num) + ", chain " + ag_chn + " and name CA")
-                print("select ag_" + str(ag_chain_num) + " near_to 4.5 of new_" + chain)
-                ag_chain_num = ag_chain_num + 1
+        for i in range(15):
+            for ag_chn in chain_ids:
+                if not ag_chn == "L" and not ag_chn == "H":
+                    print(
+                        f"select chain {ag_chn} and name CA near_to {distance_around} of chain {ab_chain} and name CA")
+            print(
+                f"translate [{translation[0]:.6f},{translation[1]:.6f},{translation[2]:.6f}], {no_ext} and chain {ab_chain}")
 
     run_pml_cmd = str(pymol_command + " -qc pymol_count.pml")
     out = subprocess.run(run_pml_cmd, shell=True, capture_output=True)
     pml_cnt_out = out.stdout.decode("utf-8").split("\n")
 
-    partial_old = []
-    partial_new = []
-
-    ag_chns = sum("Selector: selection \"sele\" defined with" in c for c in pml_cnt_out) / 2
-    oldvnew = 1
+    counts = []
 
     for pml_line in pml_cnt_out:
         if "Selector: selection \"sele\" defined with" in pml_line:
-            if oldvnew <= ag_chns:
-                partial_old.append(int(pml_line.split("with ")[-1].split(" atoms")[0]))
-                initial_count = sum(partial_old)
-            if oldvnew > ag_chns:
-                partial_new.append(int(pml_line.split("with ")[-1].split(" atoms")[0]))
-                new_count = sum(partial_new)
-            oldvnew = oldvnew + 1
+            contacts = pml_line.split("Selector")[1:]
+            for cn in contacts:
+                counts.append(int(cn.split("defined with ")[-1].split(" atoms")[0]))
 
-    if initial_count == 0:
-        initial_count = 1
-
-    if new_count > 2 * initial_count:
+    if any(c > 0 for c in counts):
         rejected.append(tested_canon[-1])
         curr_log_rej = "rej_mod_" + curr_struct + ".log"
         updt_log_rej = open(curr_log_rej, "a", newline="")
         with redirect_stdout(updt_log_rej):
-            print("\trejrep_" + tested_canon[-1] + "|Complex assembly error|FAIL")
+            print("\trejrep_" + tested_canon[-1] + "|Chain entanglement|FAIL")
         del tested_canon[-1]
 
-        print("Too many new contacts; probable modelling error. Discarding modification.")
-        raise Exception()
+        raise Exception("Inter-chain entanglement detected. Discarding modification.")
 
 
-def new_complex(latest_ab, latest_complex, latest_ab_complex, temporary, renum, scoring_strictness, approval_threshold):
+def new_complex(latest_ab, latest_complex, latest_ab_complex, temporary, renum, scoring_strictness, approval_threshold,
+                chain, dssp_tolerance):
     # Checks the affinity score of the antibody structure against the target protein
     print("Starting evaluation protocol...")
     # Alignment
@@ -268,21 +460,33 @@ def new_complex(latest_ab, latest_complex, latest_ab_complex, temporary, renum, 
     out = subprocess.run(run_pml_cmd, shell=True, capture_output=True)
     pml_out = out.stdout.decode("utf-8")
     not_chains = ["\'", "[", "]", " ", ",", "\n"]
-    chain_ids = [ch for ch in pml_out.split("cmd.get_chains:")[-1].split("\r")[0] if ch not in not_chains]
+    chain_ids = [ch for ch in pml_out.split("cmd.get_chains:")[-1].split("\r")[0].split("\n")[0] if ch not in not_chains]
 
     # Refinement with OpenMM
     print("Refining complex side chains...")
     with ClearCache():
-        refine(latest_ab_complex,latest_ab_complex)
+        refine(latest_ab_complex, latest_ab_complex)
 
     contact_ok = True
+    DSSP_ref_ok = True
 
     try:
-        contact_count(chain_ids, latest_complex, latest_ab_complex)
+        contact_count(chain_ids, chain, latest_ab_complex)
     except:
+        print("Inter-chain entanglement detected. Discarding modification.")
         contact_ok = False
 
-    if contact_ok:
+    # DSSP check after refinement
+    reference_csv = latest_complex.split("_")[3] + "_" + latest_complex.split("_")[4] + "_epitope-DSSP.csv"
+    try:
+        compare_epitope_DSSP(reference_csv, latest_ab_complex,
+                             "DSSP_rep_refinement_" + latest_ab_complex.replace(".pdb", ".csv"), dssp_tolerance)
+    except:
+        print("Discarding modification. Check DSSP_rep_refinement_" + latest_ab_complex.replace(".pdb",
+                                                                                                ".csv") + " for more information.")
+        DSSP_ref_ok = False
+
+    if contact_ok and DSSP_ref_ok:
         try:
             # Removal of insertion codes from pdb complex
             cmd_renum = "pdb_fixinsert " + latest_ab_complex + " > " + temporary + renum + "_" + latest_ab_complex
@@ -302,7 +506,6 @@ def new_complex(latest_ab, latest_complex, latest_ab_complex, temporary, renum, 
             subprocess.run(cmd_md, shell=True, capture_output=True)
 
             fix_md_models(chain_ids, latest_ab)
-            scoring(latest_ab, latest_ab_complex, scoring_strictness, approval_threshold)
 
         except:
             print("Minimization failure. Check " + tested_canon[-1] + "_error.tar for more information.")
@@ -322,6 +525,43 @@ def new_complex(latest_ab, latest_complex, latest_ab_complex, temporary, renum, 
                 subprocess.run(cmd_del_int, shell=True, capture_output=True)
 
             del tested_canon[-1]
+
+        # DSSP check after minimization
+        DSSP_min_ok = True
+        try:
+            compare_epitope_DSSP(reference_csv, "SCO_out-min.pdb",
+                                 "DSSP_rep_minimization_" + latest_ab_complex.replace(".pdb", ".csv"), dssp_tolerance)
+        except:
+            print("Discarding modification. Check DSSP_rep_minimization_" + latest_ab_complex.replace(".pdb",
+                                                                                                      ".csv") + " for more information.")
+            DSSP_min_ok = False
+
+        if DSSP_min_ok:
+            scoring(latest_ab, latest_ab_complex, scoring_strictness, approval_threshold)
+        else:
+            rejected.append(tested_canon[-1])
+            curr_log_rej = "rej_mod_" + curr_struct + ".log"
+            updt_log_rej = open(curr_log_rej, "a", newline="")
+            with redirect_stdout(updt_log_rej):
+                print("\trejrep_" + tested_canon[-1] + "|Post-minimization error|FAIL")
+
+            for rep in glob.glob("out-min.pdb"):
+                rep_chain = "CHN_" + rep
+                rep_score = "SCO_" + rep
+                cmd_del_int = "rm " + rep_chain + " " + rep + " " + rep_score + " out* *.out *.info *.rst7 *.crd *.leap *.pqr *.parm7 *.mdinfo *.mdout *.nc temp*"
+                subprocess.run(cmd_del_int, shell=True, capture_output=True)
+
+            del tested_canon[-1]
+
+    else:
+        print("Modification discarded during structure refinement.")
+        rejected.append(tested_canon[-1])
+        curr_log_rej = "rej_mod_" + curr_struct + ".log"
+        updt_log_rej = open(curr_log_rej, "a", newline="")
+        with redirect_stdout(updt_log_rej):
+            print("\trejrep_" + tested_canon[-1] + "|Complex assembly error|FAIL")
+
+        del tested_canon[-1]
 
 
 def scoring(latest_ab, latest_ab_complex, scoring_strictness, approval_threshold):
@@ -436,10 +676,11 @@ def scoring(latest_ab, latest_ab_complex, scoring_strictness, approval_threshold
             approval_prob = math.exp((float(latest_score) - av_new_score) / kT)
             metropolis = random.random()
             if (float(av_new_score) < float(latest_score)) or (
-                        metropolis < approval_prob and float(av_new_score) != float(latest_score)):
+                    metropolis < approval_prob and float(av_new_score) != float(latest_score)):
                 approval_condition = True
-            elif (float(av_new_score) > float(latest_score) and metropolis > approval_prob) or float(av_new_score) == float(
-                latest_score):
+            elif (float(av_new_score) > float(latest_score) and metropolis > approval_prob) or float(
+                    av_new_score) == float(
+                    latest_score):
                 approval_condition = False
 
         if scoring_strictness == "normal":
@@ -465,7 +706,8 @@ def scoring(latest_ab, latest_ab_complex, scoring_strictness, approval_threshold
                 print("\t" + tested_canon[-1] + "|" + str(av_new_score) + "|PASS")
                 print(new_file_name + "|" + str(av_new_score))
 
-            cmd = str("ANARCI -i " + file.replace(".anarci", "") + "_" + tested_canon[-1] + ".fasta -s martin -o " + new_file_name + " --assign_germline -p 8 --use_species human")
+            cmd = str("ANARCI -i " + file.replace(".anarci", "") + "_" + tested_canon[
+                -1] + ".fasta -s martin -o " + new_file_name + " --assign_germline -p 8 --use_species human")
             out = subprocess.run(cmd, shell=True, capture_output=True)
             log9 = (out.stderr).decode("utf-8")
             final.append(new_file_name)
@@ -513,7 +755,7 @@ approval_threshold = 0
 scoring_method = "cfg:scoring_method"
 ph = "7"
 pymol_command = "pymol"
-
+dssp_tolerance = 3
 
 cfg = open("swap_settings.cfg").readlines()
 for setting in cfg:
@@ -530,17 +772,20 @@ for setting in cfg:
     if "scoring_method" in setting:
         scoring_method = str(setting.split("=")[1].replace("\n", ""))
     if "steps" in setting:
-         steps = str(setting.split("=")[1].replace("\n", "").replace("\r",""))
+        steps = str(setting.split("=")[1].replace("\n", "").replace("\r", ""))
     if "scoring_strictness" in setting:
-        scoring_strictness = str(setting.split("=")[1].replace("\n", "").replace("\r",""))
+        scoring_strictness = str(setting.split("=")[1].replace("\n", "").replace("\r", ""))
     if "approval_threshold" in setting:
         if scoring_strictness == "strict":
-            approval_threshold = float(setting.split("=")[1].replace("\n", "").replace("\r",""))
+            approval_threshold = float(setting.split("=")[1].replace("\n", "").replace("\r", ""))
+    if "DSSP_changes_tolerance" in setting:
+        dssp_tolerance = int(setting.split("=")[1].replace("\n", "").replace("\r", ""))
 
 print("Starting new step: Representative non-H3 CDR grafting")
 
 if scoring_method == "ref15":
     from pyrosetta import *
+
     init("-mute all")
 
 base_structure = []
@@ -640,7 +885,7 @@ for st in structures:
                 H_list = ["1", "2"]
                 L_list = ["1", "2", "3"]
                 # Number of canonical structures for each CDR (Kelow,2022)
-                canon_numbers = {"H1":8, "H2":8, "L1":17, "L2":3, "L3":17}
+                canon_numbers = {"H1": 8, "H2": 8, "L1": 17, "L2": 3, "L3": 17}
                 # Residues that define each CDR and DE loop, according to the Martin/Enhanced Chothia scheme. H1 and H2 altered to fit the consensus sequences.
                 CDRH1_res = [23, 35]
                 CDRH2_res = [50, 58]
@@ -681,7 +926,7 @@ for st in structures:
                         swapH = random.choices(H_list,
                                                weights=(int(cdr_prob.split("|")[0]), int(cdr_prob.split("|")[1])), k=1)
                         swapL = random.choices(L_list, weights=(
-                        int(cdr_prob.split("|")[2]), int(cdr_prob.split("|")[3]), int(cdr_prob.split("|")[4])), k=1)
+                            int(cdr_prob.split("|")[2]), int(cdr_prob.split("|")[3]), int(cdr_prob.split("|")[4])), k=1)
                     if curr_sc_tested >= 40:
                         swapH = random.choices(H_list, weights=(1, 1), k=1)
                         swapL = random.choices(L_list, weights=(1, 1, 1), k=1)
@@ -694,7 +939,9 @@ for st in structures:
 
                     for x in locals()["swap" + chain]:
                         # Checks if all canonical structures of the chosen CDR have already been tested or not
-                        number_tested = sum(s.count('sc' + str(supercycle) + "_" + chain + x) for s in tested_canon) + sum(r.count('sc' + str(supercycle) + "_" + chain + x) for r in rejected)
+                        number_tested = sum(
+                            s.count('sc' + str(supercycle) + "_" + chain + x) for s in tested_canon) + sum(
+                            r.count('sc' + str(supercycle) + "_" + chain + x) for r in rejected)
 
                         if number_tested < canon_numbers[str(chain + x)]:
                             while not cdr_header:
@@ -751,7 +998,8 @@ for st in structures:
                                     other_chain.append(amino)
 
                         else:
-                            print("All consensus sequences for CDR " + chain + x + " have been tested. Trying another CDR...")
+                            print(
+                                "All consensus sequences for CDR " + chain + x + " have been tested. Trying another CDR...")
 
                         if main_header:
                             # If the sequence was sucessfully modified, the length of the new CDR will be checked and the modified sequence will be modeled
@@ -762,13 +1010,14 @@ for st in structures:
 
                             if int(x) == DE_co_graft:
                                 newseq = "".join(
-                                    item for item in [w for w in start if not w == "-"]) + new_CDR + "".join(item for item in [w for w in mid if not w == "-"]) + new_DE + "".join(
+                                    item for item in [w for w in start if not w == "-"]) + new_CDR + "".join(
+                                    item for item in [w for w in mid if not w == "-"]) + new_DE + "".join(
                                     item for item in [w for w in end if not w == "-"])
 
                             if not int(x) == DE_co_graft:
                                 newseq = "".join(
-                                item for item in [w for w in start if not w == "-"]) + new_CDR + "".join(
-                                item for item in [w for w in end if not w == "-"])
+                                    item for item in [w for w in start if not w == "-"]) + new_CDR + "".join(
+                                    item for item in [w for w in end if not w == "-"])
 
                             mod_header()
                             print("Modelling new antibody...")
@@ -796,7 +1045,8 @@ for st in structures:
                                 temporary = "temp"
                                 renum = "_renum"
 
-                                new_complex(latest_ab, latest_complex, latest_ab_complex, temporary, renum, scoring_strictness, approval_threshold)
+                                new_complex(latest_ab, latest_complex, latest_ab_complex, temporary, renum,
+                                            scoring_strictness, approval_threshold, chain, dssp_tolerance)
 
                 if "PASS" in condition:
                     break
