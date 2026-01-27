@@ -11,7 +11,7 @@ The utilization of predictive tools has become increasingly prevalent in the dev
 Version 7.0 introduces two important improvements:
 
 1) DSSP is now used to avoid the loss of antigen secondary structure when a new complex is assembled during CDR grafting steps;
-2) The detection and elimination of possible chain entanglements (which can happen during complex assembly in CDR grafting steps) has been greatly improved
+2) The detection and elimination of possible chain entanglements (which could rarely occur during complex assembly in CDR grafting steps) has been greatly improved.
 
 #
 ## Installation
